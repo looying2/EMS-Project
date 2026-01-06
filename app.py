@@ -65,7 +65,6 @@ init_db()
 @st.cache_resource
 def load_model_assets():
     try:
-        # Tries to load the files you downloaded earlier
         model = joblib.load("model.pkl")
         with open("feature_cols.json", "r") as f:
             features = json.load(f)
@@ -102,8 +101,6 @@ ss_init("ml_probability", 0.0)
 # ==========================================
 # 4. HELPER FUNCTIONS (Data Generation)
 # ==========================================
-
-# --- A. For the ML Model (4-Channel Snapshot) ---
 def generate_ml_window(status):
     """Generates 200 samples of 4-channel data for the Random Forest."""
     window_size = 200
@@ -157,9 +154,18 @@ with st.sidebar:
     st.subheader("Patient Profile")
     patient_id = st.text_input("Patient ID", value="PT-2024-89")
     age_group = st.selectbox("Age Group", ["60-69", "70-79", "80+"])
-    condition_tags = st.multiselect("Conditions", ["Sarcopenia", "Post-Stroke", "Osteoarthritis"], default=["Sarcopenia"])
+    condition_tags = st.multiselect("Conditions", ["Sarcopenia", "Post-Stroke", "Osteoarthritis", "Parkinson's Disease", "Muscle Atrophy"], default=["Sarcopenia"])
     mobility = st.selectbox("Mobility", ["Independent", "Assisted", "Wheelchair"])
-
+    
+    # Display height and weight for normalization, no user input for these
+    height_display = 170  # Static for normalization purposes
+    weight_display = 70   # Static for normalization purposes
+    st.markdown(f"**Height**: {height_display} cm")
+    st.markdown(f"**Weight**: {weight_display} kg")
+    
+    # --- User Role Selection (Doctor vs Caregiver) ---
+    user_role = st.selectbox("Select User Role", ["Doctor", "Caregiver"])
+    
     st.divider()
 
     st.subheader("Simulation Control")
@@ -170,13 +176,21 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Session Setup")
-    protocol = st.selectbox("Therapy Protocol", ["Strength Building", "Endurance", "Pain Management"])
+    protocol = st.selectbox("Therapy Protocol", ["Muscle Stimulation"])
     
     col_chk1, col_chk2 = st.columns(2)
     electrode_check = col_chk1.checkbox("Electrodes OK")
     skin_check = col_chk2.checkbox("Skin OK")
-    can_start = electrode_check and skin_check and st.session_state.connected
-
+    
+    # Double Confirmation for Electrode and Skin Condition
+    can_start = False
+    if electrode_check and skin_check:
+        if st.button("Confirm Electrode and Skin Condition"):
+            can_start = True
+            st.success("Electrode and Skin Condition Confirmed")
+        else:
+            st.warning("Please confirm the electrode placement and skin condition.")
+    
     if st.button("▶ Start Session", disabled=not can_start, type="primary"):
         st.session_state.system_status = "ACTIVE"
         st.session_state.session_start_time = time.time()
@@ -211,7 +225,7 @@ with header_cols[2]:
     st.metric("Time", timer)
 
 with header_cols[3]:
-    if st.button("🚨 E-STOP", type="primary"):
+    if st.button("EMERGENCY STOP", type="primary"):
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
         log_event(patient_id, "EMERGENCY_STOP")
@@ -326,12 +340,12 @@ with tab_ai:
         
         if st.session_state.system_status == "ACTIVE":
             if res == "ABNORMAL":
-                box_color = "#ffebee" # Light red
-                text_color = "red"
+                box_color = "#FFCDD2"  # Light red (deeper red)
+                text_color = "black"   # Changed to black for "Abnormal"
                 msg = "Gait Pathology Detected"
                 rec = "Evaluate electrode placement or reduce frequency."
             else:
-                box_color = "#e8f5e9" # Light green
+                box_color = "#E8F5E9"  # Light green
                 text_color = "green"
                 msg = "Normal Gait Pattern"
                 rec = "Continue current protocol."
@@ -365,12 +379,17 @@ with tab_ctrl:
     
     st.progress(0.5, text=f"Duty Cycle: {st.session_state.duty_on}s ON / {st.session_state.duty_off}s OFF")
     
-    st.markdown("#### Manual Override")
-    new_int = st.number_input("Adjust Intensity", 0, 100, st.session_state.intensity)
-    if new_int != st.session_state.intensity:
-        st.session_state.intensity = new_int
-        log_event(patient_id, "PARAM_CHANGE", f"Intensity set to {new_int}")
-        st.rerun()
+    # Restrict intensity adjustment based on user role
+    if user_role == "Doctor":
+        new_int = st.number_input("Adjust Intensity", 0, 100, st.session_state.intensity)
+        if new_int != st.session_state.intensity:
+            if st.button("Confirm Adjustment"):
+                st.session_state.intensity = new_int
+                log_event(patient_id, "PARAM_CHANGE", f"Intensity set to {new_int}")
+                st.success(f"Intensity adjusted to {new_int} mA")
+                st.rerun()
+    else:
+        st.warning("Only doctors can adjust the intensity.")
 
 # --- TAB 4: LOGS ---
 with tab_logs:
