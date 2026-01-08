@@ -218,7 +218,6 @@ ss_init("system_status", "IDLE")
 ss_init("connected", True)
 ss_init("session_start_time", None)
 ss_init("intensity", 15)
-ss_init("target_intensity", 15)
 ss_init("frequency", 40)
 ss_init("pulse_width", 300)
 ss_init("duty_on", 10)
@@ -388,21 +387,21 @@ def show_intensity_confirmation(pid, new_val):
 
     col_i1, col_i2 = st.columns(2)
     
-# --- ACCEPT BUTTON ---
+    # --- ACCEPT BUTTON ---
     if col_i1.button("Accept", type="primary"):
-        # 1. Update BOTH the active intensity and the slider target
+        # 1. Update the session state immediately
         st.session_state.intensity = new_val
-        st.session_state.target_intensity = new_val  # <--- ADD THIS LINE to sync them
         
-        # 2. Try to log...
+        # 2. Try to log, but prevent errors from keeping the window open
         try:
             log_event(pid, "PARAM_CHANGE", f"Intensity set to {new_val}")
+            # Use toast because it persists nicely after the rerun
             st.toast(f"Intensity updated to {new_val} mA", icon="⚡") 
         except Exception:
-            pass 
+            pass # Ignore logging errors to ensure the UI still works
             
         # 3. Force Close the dialog
-        st.rerun()
+        st.rerun() 
 
     # --- DENY BUTTON ---
     if col_i2.button("Deny"):
@@ -741,6 +740,7 @@ with tab_scan:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+# --- TAB 4: DEVICE CONTROL ---
 with tab_ctrl:
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("Stimulation Parameters")
@@ -762,13 +762,9 @@ with tab_ctrl:
         with col_btn:
             st.markdown("<br>", unsafe_allow_html=True)
             if new_int != st.session_state.intensity:
-                # Ensure the intensity adjustment works even if the session is ongoing (ACTIVE)
-                if st.session_state.system_status == "ACTIVE" or st.session_state.system_status == "PAUSED":
-                    # Trigger the new Intensity Confirmation Dialog
-                    if st.button("Apply Changes", type="primary"):
-                        show_intensity_confirmation(patient_id, new_int)
-                else:
-                    st.warning("Cannot adjust intensity unless the session is active or paused.")
+                # Trigger the new Intensity Confirmation Dialog
+                if st.button("Apply Changes", type="primary"):
+                    show_intensity_confirmation(patient_id, new_int)
     else:
         st.warning("Intensity adjustments are locked for Caregiver role.")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -784,7 +780,7 @@ with tab_logs:
     st.download_button("Download CSV", csv, f"audit_{patient_id}.csv", "text/csv")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 6: PROGRESS SUMMARY ---
+# --- TAB 5: PROGRESS SUMMARY ---
 with tab_progress:
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("Session Summary & Progress")
@@ -861,6 +857,3 @@ with tab_progress:
 if st.session_state.system_status == "ACTIVE":
     time.sleep(1)
     st.rerun()
-
-
-
