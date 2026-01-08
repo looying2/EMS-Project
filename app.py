@@ -10,6 +10,8 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from collections import deque
 import io
+from PIL import Image # For handling the camera image
+# import tensorflow as tf # Uncomment this when you have your actual model ready
 
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
@@ -21,13 +23,14 @@ st.set_page_config(
     page_icon="🩺"
 )
 
-# Custom CSS for "Medical Modern" Aesthetic
+# SINGLE CONSOLIDATED CSS BLOCK
 st.markdown("""
 <style>
-    /* --- MAIN LAYOUT & BACKGROUND --- */
+    /* --- 1. GRADIENT BACKGROUND --- */
     .stApp {
-        background-color: #F0F2F6; /* Soft Clinical Grey-Blue */
+        background: linear-gradient(135deg, #F0F2F6 0%, #E3F2FD 100%);
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #31333F; /* Force dark text for readability */
     }
 
     /* --- HEADINGS --- */
@@ -36,7 +39,7 @@ st.markdown("""
         font-weight: 600;
     }
 
-    /* --- CUSTOM DASHBOARD CARDS --- */
+    /* --- DASHBOARD CARDS --- */
     .dashboard-card {
         background-color: #FFFFFF;
         padding: 20px;
@@ -62,45 +65,90 @@ st.markdown("""
     }
     div[data-testid="stMetricValue"] {
         font-size: 1.8rem;
-        color: #2A9D8F; /* Medical Teal */
+        color: #2A9D8F;
         font-weight: 700;
     }
 
-    /* --- BUTTON STYLING --- */
-    /* Primary (Start) Buttons */
-    div.stButton > button {
-        border-radius: 25px;
-        padding: 10px 24px;
-        font-weight: 600;
-        transition: all 0.3s ease;
+    /* --- 2. ACTIVE TAB HIGHLIGHT --- */
+    button[data-baseweb="tab"] {
+        font-size: 16px;
+        font-weight: 400;
+        color: #607D8B;
     }
-    
-    /* Emergency Button Specific Styling */
-    div.stButton > button[kind="primary"] {
-         background-color: #EF5350 !important;
-         color: white !important;
-         border: none;
+    button[data-baseweb="tab"][aria-selected="true"] {
+        font-size: 18px !important;
+        font-weight: 700 !important;
+        background-color: #E3F2FD !important;
+        color: #264653 !important;
+        border-radius: 8px 8px 0 0;
     }
 
-    /* --- SIDEBAR --- */
+    /* --- 3. SESSION CONTROL BUTTONS (Columns 5, 6, 7) --- */
+    /* Start Button (Green) - Column 5 */
+    div[data-testid="column"]:nth-of-type(5) div.stButton > button {
+        background-color: #2E8B57; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(5) div.stButton > button:hover {
+        background-color: #3CB371;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(46, 139, 87, 0.4);
+    }
+
+    /* Pause Button (Orange) - Column 6 */
+    div[data-testid="column"]:nth-of-type(6) div.stButton > button {
+        background-color: #FF8C00; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(6) div.stButton > button:hover {
+        background-color: #FFA500;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(255, 140, 0, 0.4);
+    }
+
+    /* Stop Button (Red) - Column 7 */
+    div[data-testid="column"]:nth-of-type(7) div.stButton > button {
+        background-color: #D32F2F; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(7) div.stButton > button:hover {
+        background-color: #EF5350;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(211, 47, 47, 0.4);
+    }
+
+    /* --- 4. HEADER EMERGENCY BUTTON (Column 4) --- */
+    div[data-testid="column"]:nth-of-type(4) div.stButton > button {
+        font-weight: 900 !important;
+        font-size: 1.1em !important;
+        text-transform: uppercase;
+        box-shadow: 0 4px 6px rgba(239, 83, 80, 0.3);
+        background-color: #EF5350 !important;
+        color: white !important;
+        border: none;
+    }
+
+    /* --- SIDEBAR & ALERTS --- */
     section[data-testid="stSidebar"] {
         background-color: #FFFFFF;
         border-right: 1px solid #E0E0E0;
     }
-
-    /* --- ALERTS --- */
     .alert-box {
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-        border-left: 5px solid;
+        padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid;
     }
-    .alert-safe { background-color: #E8F5E9; border-color: #4CAF50; color: #1B5E20; }
+    .alert-safe { background-color: #FFFFFF; border-color: #4CAF50; color: #1B5E20; }
     .alert-risk { background-color: #FFEBEE; border-color: #EF5350; color: #B71C1C; }
     .alert-info { background-color: #E3F2FD; border-color: #2196F3; color: #0D47A1; }
 
 </style>
 """, unsafe_allow_html=True)
+
 
 # ==========================================
 # 2. DATABASE & ML SETUP
@@ -165,10 +213,12 @@ def ss_init(key, value):
     if key not in st.session_state:
         st.session_state[key] = value
 
+ss_init("elapsed_time", 0.0) 
 ss_init("system_status", "IDLE")
 ss_init("connected", True)
 ss_init("session_start_time", None)
 ss_init("intensity", 15)
+ss_init("target_intensity", 15)
 ss_init("frequency", 40)
 ss_init("pulse_width", 300)
 ss_init("duty_on", 10)
@@ -202,6 +252,21 @@ def extract_features(raw_window_df):
     feats['rms_vasto_medial'] = np.sqrt(np.mean(raw_window_df["Vasto Medial"]**2))
     feats['rms_emg_semitendinoso'] = np.sqrt(np.mean(raw_window_df["EMG Semitendinoso"]**2))
     return pd.DataFrame([feats])
+
+def confirm_start_callback(pid, proto):
+    # 1. Logic: Reset timer bank only if this is a fresh start (not resuming)
+    if st.session_state.system_status != "PAUSED":
+        st.session_state.elapsed_time = 0.0
+
+    # 2. Update System State
+    st.session_state.system_status = "ACTIVE"
+    st.session_state.session_start_time = time.time()
+
+    # 3. Logging (Protected)
+    try:
+        log_event(pid, "SESSION_START", f"Protocol={proto}")
+    except Exception:
+        pass
 
 def update_telemetry_stream():
     df = st.session_state.telemetry.copy()
@@ -254,6 +319,31 @@ def generate_report(pid, mass_df, pain_df, fatigue_df):
     
     return report_buffer.getvalue()
 
+# --- NEW FUNCTION: CNN SCAN ANALYSIS ---
+def analyze_scan_image(image_buffer):
+    """
+    Simulates CNN analysis of a DEXA/BIA scan image.
+    Replace the commented sections with real model code later.
+    """
+    # 1. Load and Preprocess Image
+    img = Image.open(image_buffer)
+    # img = img.resize((224, 224)) # standard CNN input size
+    # img_array = np.array(img) / 255.0 # normalize pixel values
+    
+    # 2. Load Model & Predict (Placeholder)
+    # model = tf.keras.models.load_model('dexa_analyzer.h5')
+    # prediction = model.predict(img_array)
+    
+    # 3. Simulate Output (Remove this block when using real model)
+    time.sleep(1.5) # Simulate processing delay
+    mock_data = {
+        "Body Fat Percentage": np.round(np.random.uniform(18.5, 24.2), 1),
+        "Lean Muscle Mass (kg)": np.round(np.random.uniform(48.0, 55.5), 1),
+        "Bone Mineral Density": np.round(np.random.uniform(1.1, 1.4), 2),
+        "Visceral Fat Level": np.random.randint(3, 8)
+    }
+    return mock_data
+
 # ==========================================
 # 5. DIALOGS (Confirmations)
 # ==========================================
@@ -265,14 +355,29 @@ def show_start_confirmation(pid, proto):
     st.warning("Ensure patient is ready for stimulation.")
     
     col_d1, col_d2 = st.columns(2)
+    
+    # --- YES BUTTON (Direct Logic) ---
     if col_d1.button("Yes (Start)", type="primary"):
+        # 1. Update State DIRECTLY
+        # Reset timer only if this is a fresh start
+        if st.session_state.system_status != "PAUSED":
+            st.session_state.elapsed_time = 0.0
+            
         st.session_state.system_status = "ACTIVE"
         st.session_state.session_start_time = time.time()
-        log_event(pid, "SESSION_START", f"Protocol={proto}")
-        st.rerun() # Auto-close and refresh
+        
+        # 2. Log Event (Protected from errors)
+        try:
+            log_event(pid, "SESSION_START", f"Protocol={proto}")
+        except Exception:
+            pass # Use 'pass' to ensure the code continues to st.rerun() even if DB fails
+            
+        # 3. CRITICAL: Force Rerun to close dialog and update Main UI
+        st.rerun()
 
+    # --- NO BUTTON ---
     if col_d2.button("No (Cancel)"):
-        st.rerun() # Auto-close and refresh
+        st.rerun()
 
 # 5b. Intensity Adjustment Dialog
 @st.dialog("Confirm Intensity Adjustment")
@@ -283,15 +388,25 @@ def show_intensity_confirmation(pid, new_val):
 
     col_i1, col_i2 = st.columns(2)
     
+# --- ACCEPT BUTTON ---
     if col_i1.button("Accept", type="primary"):
+        # 1. Update BOTH the active intensity and the slider target
         st.session_state.intensity = new_val
-        log_event(pid, "PARAM_CHANGE", f"Intensity set to {new_val}")
-        st.success("Updated")
-        st.rerun() # Auto-close and refresh
+        st.session_state.target_intensity = new_val  # <--- ADD THIS LINE to sync them
+        
+        # 2. Try to log...
+        try:
+            log_event(pid, "PARAM_CHANGE", f"Intensity set to {new_val}")
+            st.toast(f"Intensity updated to {new_val} mA", icon="⚡") 
+        except Exception:
+            pass 
+            
+        # 3. Force Close the dialog
+        st.rerun()
 
+    # --- DENY BUTTON ---
     if col_i2.button("Deny"):
-        st.rerun() # Auto-close and refresh (keeps old value)
-
+        st.rerun() # Auto-close without saving
 
 # ==========================================
 # 6. SIDEBAR
@@ -324,27 +439,41 @@ with st.sidebar:
     # Styled buttons using columns for layout
     c1, c2 = st.columns(2)
     
-    # Logic: Show different Start Button based on Status
-    if st.session_state.system_status == "ACTIVE":
-        # Visual Change: Green, Disabled button indicating running state
-        st.button("Session Running...", disabled=True, use_container_width=True)
-    else:
-        # Standard Start Button that triggers Dialog
-        if st.button("▶ START", use_container_width=True):
-            show_start_confirmation(patient_id, protocol)
+# --- CUSTOM CSS FOR COLORED BUTTONS ---
+st.markdown("""
+<style>
+    /* Target the 3 columns for buttons */
+    /* Column 1: Start (Green) */
+    div[data-testid="column"]:nth-of-type(1) div.stButton > button {
+        background-color: #2E8B57;
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(1) div.stButton > button:hover {
+        background-color: #3CB371; /* Lighter Green on hover */
+    }
 
-    # Pause Button
-    if st.button("⏸ PAUSE", disabled=st.session_state.system_status != "ACTIVE", use_container_width=True):
-        st.session_state.system_status = "PAUSED"
-        log_event(patient_id, "SESSION_PAUSE")
-        st.rerun()
+    /* Column 2: Pause (Orange) */
+    div[data-testid="column"]:nth-of-type(2) div.stButton > button {
+        background-color: #FF8C00; 
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(2) div.stButton > button:hover {
+        background-color: #FFA500; /* Lighter Orange on hover */
+    }
 
-    # Stop Button
-    if st.button("⏹ STOP SESSION", disabled=st.session_state.system_status not in ["ACTIVE", "PAUSED"], use_container_width=True):
-        st.session_state.system_status = "STOPPED"
-        st.session_state.intensity = 0
-        log_event(patient_id, "SESSION_STOP")
-        st.rerun()
+    /* Column 3: Stop (Red) */
+    div[data-testid="column"]:nth-of-type(3) div.stButton > button {
+        background-color: #D32F2F;
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(3) div.stButton > button:hover {
+        background-color: #EF5350; /* Lighter Red on hover */
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 7. HEADER & STATUS
@@ -362,19 +491,75 @@ with header_cols[1]:
     st.markdown(f"<div style='text-align:center; color:{status_color}; font-weight:bold; font-size:1.2em; margin-top:10px;'>● {st.session_state.system_status}</div>", unsafe_allow_html=True)
 
 with header_cols[2]:
-    timer = "--:--"
-    if st.session_state.session_start_time and st.session_state.system_status == "ACTIVE":
-        elapsed = int(time.time() - st.session_state.session_start_time)
-        timer = f"{elapsed//60:02d}:{elapsed%60:02d}"
+    # Calculate Total Seconds
+    total_seconds = st.session_state.elapsed_time
+    
+    # If currently running, add the time since the last "Start" click
+    if st.session_state.system_status == "ACTIVE" and st.session_state.session_start_time:
+        total_seconds += (time.time() - st.session_state.session_start_time)
+        
+    # Format to MM:SS
+    elapsed = int(total_seconds)
+    timer = f"{elapsed//60:02d}:{elapsed%60:02d}"
     st.metric("Session Time", timer)
 
 with header_cols[3]:
+    # Direct Action: No Dialog, Immediate Stop
     if st.button("Emergency STOP", type="primary", use_container_width=True):
+        # 1. Immediate State Reset
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        log_event(patient_id, "EMERGENCY_STOP")
+        
+        # 2. Reset Timer
+        st.session_state.elapsed_time = 0.0 
+        st.session_state.session_start_time = None
+        
+        # 3. Log Event
+        try:
+            log_event(patient_id, "EMERGENCY_STOP", "Immediate Trigger - No Confirmation")
+        except Exception:
+            pass
+
+        # 4. Force Refresh
         st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# 8. SESSION CONTROLS (Moved to Main Body)
+# ==========================================
+st.markdown("### Session Control")
+col_start, col_pause, col_stop = st.columns(3)
+
+# 1. START BUTTON
+with col_start:
+    if st.session_state.system_status == "ACTIVE":
+        st.button("✅ Session Running...", disabled=True, use_container_width=True)
+    else:
+        if st.button("▶ START", use_container_width=True):
+            show_start_confirmation(patient_id, protocol)
+
+# 2. PAUSE BUTTON 
+with col_pause:
+    is_disabled = st.session_state.system_status != "ACTIVE"
+    if st.button("⏸ PAUSE", disabled=is_disabled, use_container_width=True):
+        if st.session_state.session_start_time:
+            segment_duration = time.time() - st.session_state.session_start_time
+            st.session_state.elapsed_time += segment_duration
+        
+        st.session_state.system_status = "PAUSED"
+        st.session_state.session_start_time = None
+        log_event(patient_id, "SESSION_PAUSE")
+        st.rerun()
+
+# 3. STOP BUTTON 
+with col_stop:
+    is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
+    if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
+        st.session_state.system_status = "STOPPED"
+        st.session_state.intensity = 0
+        st.session_state.elapsed_time = 0.0 
+        st.session_state.session_start_time = None
+        log_event(patient_id, "SESSION_STOP")
+        st.rerun()
 
 # ==========================================
 # 8. MAIN LOGIC LOOP
@@ -398,8 +583,9 @@ if st.session_state.connected:
 # ==========================================
 # 9. TABS
 # ==========================================
-tab_live, tab_ai, tab_ctrl, tab_logs, tab_progress = st.tabs(
-    ["Live Monitoring", "AI & RAG Analysis", "Device Control", "Audit Logs", "Progress Summary"]
+
+tab_live, tab_ai, tab_scan, tab_ctrl, tab_logs, tab_progress = st.tabs(
+    ["Live Monitoring", "AI & RAG Analysis", "Scan Analysis", "Device Control", "Audit Logs", "Progress Summary"]
 )
 
 # --- TAB 1: LIVE MONITORING ---
@@ -508,7 +694,53 @@ with tab_ai:
             st.info("Start session to enable ML analysis.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 3: DEVICE CONTROL ---
+# --- TAB 3 (NEW): SCAN ANALYSIS ---
+with tab_scan:
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("InBody/DEXA Scan Digitizer")
+    st.info("Align the printed scan result within the camera frame below.")
+    
+    col_cam, col_results = st.columns([1, 1.5])
+    
+    with col_cam:
+        # The Camera Input Widget
+        scan_img = st.camera_input("Capture Scan Result")
+    
+    with col_results:
+        if scan_img:
+            st.markdown("##### Analysis Status")
+            # Button to trigger CNN
+            if st.button("Run CNN Analysis", type="primary"):
+                with st.spinner("Processing image via Neural Network..."):
+                    # Call our helper function
+                    results = analyze_scan_image(scan_img)
+                
+                st.success("Digitization Complete")
+                
+                # Display Results in a nice metric grid
+                c_res1, c_res2 = st.columns(2)
+                c_res1.metric("Body Fat %", f"{results['Body Fat Percentage']}%")
+                c_res2.metric("Muscle Mass", f"{results['Lean Muscle Mass (kg)']} kg")
+                
+                c_res3, c_res4 = st.columns(2)
+                c_res3.metric("Bone Density", f"{results['Bone Mineral Density']} g/cm²")
+                c_res4.metric("Visceral Fat", f"Lvl {results['Visceral Fat Level']}")
+                
+                # Option to log this to the database
+                if st.button("Save to Patient Record"):
+                    details = json.dumps(results)
+                    log_event(patient_id, "SCAN_UPLOAD", details)
+                    st.toast("Scan data saved to audit log!", icon="✅")
+        else:
+            st.markdown("""
+            <div style="text-align:center; padding:40px; color:#90A4AE; border: 2px dashed #CFD8DC; border-radius:10px;">
+                Waiting for image capture...<br>
+                <small>Ensure good lighting for best CNN accuracy.</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 with tab_ctrl:
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("Stimulation Parameters")
@@ -530,14 +762,18 @@ with tab_ctrl:
         with col_btn:
             st.markdown("<br>", unsafe_allow_html=True)
             if new_int != st.session_state.intensity:
-                # Trigger the new Intensity Confirmation Dialog
-                if st.button("Apply Changes", type="primary"):
-                    show_intensity_confirmation(patient_id, new_int)
+                # Ensure the intensity adjustment works even if the session is ongoing (ACTIVE)
+                if st.session_state.system_status == "ACTIVE" or st.session_state.system_status == "PAUSED":
+                    # Trigger the new Intensity Confirmation Dialog
+                    if st.button("Apply Changes", type="primary"):
+                        show_intensity_confirmation(patient_id, new_int)
+                else:
+                    st.warning("Cannot adjust intensity unless the session is active or paused.")
     else:
         st.warning("Intensity adjustments are locked for Caregiver role.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 4: LOGS ---
+# --- TAB 5: LOGS ---
 with tab_logs:
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("Session Audit Trail")
@@ -548,7 +784,7 @@ with tab_logs:
     st.download_button("Download CSV", csv, f"audit_{patient_id}.csv", "text/csv")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 5: PROGRESS SUMMARY ---
+# --- TAB 6: PROGRESS SUMMARY ---
 with tab_progress:
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("Session Summary & Progress")
@@ -625,4 +861,6 @@ with tab_progress:
 if st.session_state.system_status == "ACTIVE":
     time.sleep(1)
     st.rerun()
+
+
 
