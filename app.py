@@ -411,7 +411,7 @@ def show_intensity_confirmation(pid, new_val):
 # 6. SIDEBAR
 # ==========================================
 with st.sidebar:
-    st.title("NeuroFlex System")
+    st.title("AI-Enchanced EMS System")
     st.caption(f"ML Engine: {model_status}")
     st.divider()
 
