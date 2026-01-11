@@ -17,7 +17,7 @@ from PIL import Image # For handling the camera image
 # 1. PAGE CONFIGURATION & AESTHETICS
 # ==========================================
 st.set_page_config(
-    page_title="NeuroFlex AI-EMS Clinical Dashboard",
+    page_title="AI-EMS Clinical Dashboard",
     layout="wide",
     initial_sidebar_state="expanded",
     page_icon="🩺"
