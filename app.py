@@ -1,3 +1,4 @@
+import requests
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,7 +12,13 @@ from datetime import datetime, timedelta
 from collections import deque
 import io
 from PIL import Image # For handling the camera image
-# import tensorflow as tf # Uncomment this when you have your actual model ready
+import threading
+from server import app as flask_app   # assuming server.py defines a Flask instance
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=5000)
+
+threading.Thread(target=run_flask, daemon=True).start()
 
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
@@ -48,6 +55,14 @@ st.markdown("""
         margin-bottom: 20px;
         border: 1px solid #E0E0E0;
     }
+
+/* Make all metric boxes the same height */
+div[data-testid="stMetric"] {
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
 
     /* --- METRIC BOXES --- */
     div[data-testid="stMetric"] {
@@ -134,6 +149,23 @@ st.markdown("""
         border: none;
     }
 
+    /* --- 5. INPUT BOXES (Patient ID, User Role, etc.) --- */
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="base-input"],
+    div[data-testid="stMultiSelect"] > div > div {
+        background-color: #F0F9FF !important; /* Bright Light Blue */
+        border: 1px solid #BAE6FD !important;
+        border-radius: 8px !important;
+    }
+    
+    /* Force text inside the input boxes to be dark */
+    input, select, div[data-baseweb="select"] span {
+        color: #264653 !important; /* Matches your Dark Slate Blue */
+        -webkit-text-fill-color: #264653 !important;
+        font-weight: 600 !important;
+    }
+
     /* --- SIDEBAR & ALERTS --- */
     section[data-testid="stSidebar"] {
         background-color: #FFFFFF;
@@ -148,7 +180,6 @@ st.markdown("""
 
 </style>
 """, unsafe_allow_html=True)
-
 
 # ==========================================
 # 2. DATABASE & ML SETUP
@@ -226,10 +257,63 @@ ss_init("telemetry", pd.DataFrame(columns=["t", "emg", "hr", "imp"]))
 ss_init("ml_window", None)
 ss_init("ml_prediction", "WAITING")
 ss_init("ml_probability", 0.0)
+ss_init("live_pain", 2)      # default pain score
+ss_init("live_fatigue", 4)    # default fatigue level
 
 # ==========================================
 # 4. HELPER FUNCTIONS
 # ==========================================
+
+def predict_muscle_state(emg_value):
+
+    if emg_value > 700:
+        return (
+            "Overexertion",
+            "🔴",
+            "High muscle stress detected"
+        )
+
+    elif emg_value > 500:
+        return (
+            "Muscle Fatigue",
+            "🟠",
+            "Sustained muscle activation observed"
+        )
+
+    elif emg_value > 300:
+        return (
+            "Moderate Activity",
+            "🟡",
+            "Normal rehabilitation activity"
+        )
+
+    else:
+        return (
+            "Relaxed",
+            "🟢",
+            "Low muscle activity"
+        )
+
+# EMG smoothing buffer
+smooth_buffer = deque(maxlen=10)
+
+def smooth_emg(value):
+    smooth_buffer.append(value)
+    return np.mean(smooth_buffer)
+
+def read_emg():
+    try:
+        r = requests.get("http://127.0.0.1:5000/emg")
+        data = r.json()
+
+        if len(data) > 0:
+            return data[-1]
+
+        return 0
+
+    except:
+        return 0
+
 def generate_ml_window(status):
     window_size = 200
     noise_level = 0.5
@@ -272,7 +356,8 @@ def update_telemetry_stream():
     now = datetime.now().strftime("%H:%M:%S")
 
     if st.session_state.system_status == "ACTIVE":
-        emg = np.random.normal(st.session_state.intensity * 2, 4)
+        raw_emg = read_emg()
+        emg = smooth_emg(raw_emg)
         hr = int(np.clip(np.random.normal(74, 3), 60, 110))
         imp = float(np.clip(np.random.normal(1.2, 0.1), 0.7, 2.5))
     else:
@@ -282,14 +367,14 @@ def update_telemetry_stream():
 
     new_row = pd.DataFrame([{"t": now, "emg": emg, "hr": hr, "imp": imp}])
     df = pd.concat([df, new_row], ignore_index=True)
-    st.session_state.telemetry = df.tail(60)
+    st.session_state.telemetry = df.tail(200)
 
 def generate_report(pid, mass_df, pain_df, fatigue_df):
     """Generates a text report for download."""
     report_buffer = io.StringIO()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    report_buffer.write(f"NEUROFLEX CLINICAL PROGRESS REPORT\n")
+    report_buffer.write(f"RehaTech Clinical Progress Report\n")
     report_buffer.write(f"=================================\n")
     report_buffer.write(f"Patient ID: {pid}\n")
     report_buffer.write(f"Date Generated: {timestamp}\n\n")
@@ -318,7 +403,7 @@ def generate_report(pid, mass_df, pain_df, fatigue_df):
     
     return report_buffer.getvalue()
 
-# --- NEW FUNCTION: CNN SCAN ANALYSIS ---
+# --- NEW FUNCTION: SCAN ANALYSIS ---
 def analyze_scan_image(image_buffer):
     """
     Simulates CNN analysis of a DEXA/BIA scan image.
@@ -334,7 +419,7 @@ def analyze_scan_image(image_buffer):
     # prediction = model.predict(img_array)
     
     # 3. Simulate Output (Remove this block when using real model)
-    time.sleep(1.5) # Simulate processing delay
+    time.sleep(1) # Simulate processing delay
     mock_data = {
         "Body Fat Percentage": np.round(np.random.uniform(18.5, 24.2), 1),
         "Lean Muscle Mass (kg)": np.round(np.random.uniform(48.0, 55.5), 1),
@@ -587,43 +672,156 @@ tab_live, tab_ai, tab_scan, tab_ctrl, tab_logs, tab_progress = st.tabs(
     ["Live Monitoring", "AI & RAG Analysis", "Scan Analysis", "Device Control", "Audit Logs", "Progress Summary"]
 )
 
-# --- TAB 1: LIVE MONITORING ---
+# --- TAB 1: IMPROVED LIVE MONITORING LAYOUT ---
 with tab_live:
-    col_main_plot, col_mini_plot = st.columns([3, 1])
-    
-    with col_main_plot:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("Global EMG Telemetry (RMS)")
-        tele = st.session_state.telemetry
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=tele["t"], y=tele["emg"], mode="lines", fill='tozeroy', name="EMG", line=dict(color='#2A9D8F', width=2)))
-        fig.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis_title="Amplitude (uV)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col_mini_plot:
-        # Vitals stack
-        last_hr = tele['hr'].iloc[-1] if len(tele) > 0 else 0
-        last_imp = tele['imp'].iloc[-1] if len(tele) > 0 else 0
-        
-        st.metric("Heart Rate", f"{last_hr} BPM")
-        st.metric("Impedance", f"{last_imp:.1f} kΩ")
-        
-        st.markdown('<div class="dashboard-card" style="margin-top:20px; padding:15px;">', unsafe_allow_html=True)
-        st.caption("Raw Signal (4-CH)")
-        if st.session_state.ml_window is not None:
-            st.line_chart(st.session_state.ml_window, height=100)
-        else:
-            st.info("No active data")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # 1. Prepare data
+    tele = st.session_state.telemetry
+    latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
+    last_hr = tele['hr'].iloc[-1] if not tele.empty else 0
+    last_imp = tele['imp'].iloc[-1] if not tele.empty else 0
+    recent_peak = tele['emg'].tail(50).max() if not tele.empty else 0
 
-    # Feedback Section
-    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.subheader("Patient Feedback Input")
-    c_feed1, c_feed2 = st.columns(2)
-    pain_score = c_feed1.slider("Pain / Discomfort (0–10)", 0, 10, 2)
-    fatigue_score = c_feed2.slider("Fatigue Level (0–10)", 0, 10, 4)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # AI prediction
+    pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
+
+    # ================= ROW 1: VITAL METRICS =================
+    st.markdown("### Vital Signs & EMG Status")
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    with col_m1:
+        st.metric("🫀 Heart Rate", f"{last_hr} BPM", delta=None)
+    with col_m2:
+        st.metric("⚡ Impedance", f"{last_imp:.1f} kΩ", delta=None)
+    with col_m3:
+        st.metric("📈 Current EMG", f"{latest_emg:.1f} µV", 
+                  delta=f"{latest_emg - tele['emg'].iloc[-2] if len(tele)>1 else 0:.1f}")
+    with col_m4:
+        st.metric("🔔 Peak (Session)", f"{recent_peak:.1f} µV")
+
+    st.markdown("---")
+
+    # ================= ROW 2: MAIN TELEMETRY PLOT =================
+    st.markdown("### Real‑Time EMG Telemetry")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=tele["t"], y=tele["emg"],
+        mode="lines", fill='tozeroy',
+        line=dict(color='#2A9D8F', width=3)
+    ))
+    fig.update_layout(
+        height=320,
+        margin=dict(l=10, r=10, t=20, b=10),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        yaxis=dict(title="Amplitude (µV)", gridcolor='#E2E8F0'),
+        xaxis=dict(title="Time", showgrid=False),
+        showlegend=False
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ================= ROW 3: SIMPLIFIED ANALYSIS & FEEDBACK =================
+    st.markdown("### Clinical Overview & Patient Input")
+    col_analysis, col_feedback = st.columns([2, 1], gap="large")
+
+    with col_analysis:
+        st.markdown("#### 🧠 AI Real‑Time Analysis")
+        
+        # Modern AI card (without activation/system status)
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%);
+            border-radius: 16px;
+            padding: 16px;
+            border: 1px solid #E2E8F0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        ">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 1.5rem;">{pred_icon}</span>
+                <span style="font-weight: 600; color: #1E293B;">AI PREDICTION</span>
+            </div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: #0F172A; margin-bottom: 6px;">
+                {pred_label}
+            </div>
+            <div style="font-size: 0.8rem; color: #475569; margin-bottom: 12px;">
+                {pred_desc}
+            </div>
+            <div style="height: 4px; background: #E2E8F0; border-radius: 2px;">
+                <div style="width: {min(100, (latest_emg/1000)*100)}%; height: 4px; background: #2A9D8F; border-radius: 2px;"></div>
+            </div>
+            <div style="font-size: 0.7rem; color: #64748B; margin-top: 6px;">
+                EMG intensity indicator
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.caption("☁️ Real‑time data sync · 1 Hz")
+
+    with col_feedback:
+        st.markdown("#### 💬 Patient Feedback")
+        
+        pain = st.slider(
+            "Pain Score (0‑10)", 0, 10,
+            value=st.session_state.get("live_pain", 2),
+            key="live_pain"
+        )
+        fatigue = st.slider(
+            "Fatigue Level (0‑10)", 0, 10,
+            value=st.session_state.get("live_fatigue", 4),
+            key="live_fatigue"
+        )
+        
+        if pain > 7:
+            st.error("🚨 High pain – consider reducing intensity.")
+        elif pain > 4:
+            st.warning("⚠️ Moderate pain – monitor closely.")
+        else:
+            st.success("✅ Pain acceptable.")
+        
+        if fatigue > 7:
+            st.info("💤 High fatigue – suggest longer rest periods.")
+
+    # ================= ROW 4: ENHANCED RAW SIGNAL EXPANDER =================
+    with st.expander("🔍 View Raw 4‑Channel Signal (Advanced)"):
+        if st.session_state.ml_window is not None:
+            # Get the current raw window (last 200 samples)
+            raw_df = st.session_state.ml_window
+            
+            # Compute RMS for each channel (latest window)
+            rms_values = {}
+            for col in raw_df.columns:
+                rms_values[col] = np.sqrt(np.mean(raw_df[col]**2))
+            
+            # Create a summary dataframe
+            summary_df = pd.DataFrame({
+                "Muscle Channel": list(rms_values.keys()),
+                "RMS (µV)": [f"{v:.1f}" for v in rms_values.values()],
+                "Clinical State": [
+                    "Normal" if v < 8 else "Elevated" if v < 15 else "High"
+                    for v in rms_values.values()
+                ]
+            })
+            
+            st.markdown("#### 📊 Channel Summary (Last 200 samples)")
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("#### 📈 Raw EMG Trends")
+            st.line_chart(raw_df, height=300)
+            
+            st.markdown("#### 💡 Clinical Notes")
+            st.info("""
+            - **Recto Femoral** – primary knee extensor; high activity suggests good quadriceps recruitment.
+            - **Biceps Femoral** – hamstring; imbalance with Recto Femoral may indicate co‑contraction.
+            - **Vasto Medial** – key for patellar stability; low activity can predispose to knee pain.
+            - **EMG Semitendinoso** – medial hamstring; compare with Biceps Femoral for lateral/medial balance.
+            """)
+            
+            # Signal quality indicator (simulated)
+            st.markdown("#### 📡 Signal Quality")
+            quality_score = np.random.uniform(85, 98)  # replace with real SNR calculation
+            st.progress(quality_score/100, text=f"SNR: {quality_score:.1f}% – Good")
+        else:
+            st.info("No active raw signal. Start a session to see 4‑channel EMG data.")
 
 # --- TAB 2: AI & RAG ANALYSIS ---
 with tab_ai:
@@ -635,13 +833,17 @@ with tab_ai:
         st.subheader("Safety & Optimization (Rules)")
         
         if st.session_state.system_status == "ACTIVE":
-            if pain_score >= 6:
+            # Use session state values from Live Monitoring tab
+            pain_val = st.session_state.get("live_pain", 0)
+            fatigue_val = st.session_state.get("live_fatigue", 0)
+            
+            if pain_val >= 6:
                 st.markdown("""<div class="alert-box alert-risk">
                 <strong>High Pain Detected</strong><br>
                 Observation: Pain Score > 6<br>
                 Action: Reducing intensity by 20% (Rule PAIN-01)
                 </div>""", unsafe_allow_html=True)
-            elif fatigue_score >= 7:
+            elif fatigue_val >= 7:
                 st.markdown("""<div class="alert-box alert-info">
                 <strong>High Fatigue</strong><br>
                 Observation: Patient reported fatigue > 7<br>
@@ -709,7 +911,7 @@ with tab_scan:
         if scan_img:
             st.markdown("##### Analysis Status")
             # Button to trigger CNN
-            if st.button("Run CNN Analysis", type="primary"):
+            if st.button("Run Scan Analysis", type="primary"):
                 with st.spinner("Processing image via Neural Network..."):
                     # Call our helper function
                     results = analyze_scan_image(scan_img)
@@ -855,5 +1057,7 @@ with tab_progress:
 # 10. AUTO REFRESH
 # ==========================================
 if st.session_state.system_status == "ACTIVE":
-    time.sleep(1)
+    time.sleep(0.2)
     st.rerun()
+
+
