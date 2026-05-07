@@ -1,6 +1,8 @@
 streamlit
+flask
+requests
 pandas
 numpy
 plotly
+pillow
 joblib
-scikit-learn
