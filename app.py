@@ -12,13 +12,28 @@ from datetime import datetime, timedelta
 from collections import deque
 import io
 from PIL import Image # For handling the camera image
-import threading
-from server import app as flask_app   # assuming server.py defines a Flask instance
+# import tensorflow as tf # Uncomment this when you have your actual model ready
 
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=5000)
+import pyrebase
 
-threading.Thread(target=run_flask, daemon=True).start()
+# Borrowed from your Firebase JavaScript snippet
+firebase_config = {
+    "apiKey": "AIzaSyCa7QrTH0BlJj5OQzmHzg5UJbJ9koW-g0k",
+    "authDomain": "ems-dashboard-2080b.firebaseapp.com",
+    "databaseURL": "https://ems-dashboard-2080b-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "projectId": "ems-dashboard-2080b",
+    "storageBucket": "ems-dashboard-2080b.firebasestorage.app",
+    "messagingSenderId": "847131623680",
+    "appId": "1:847131623680:web:be7ed7cb5e33028a7cb3e5",
+    "measurementId": "G-MGE108QRJY"
+}
+
+# Initialize Firebase for Python
+firebase = pyrebase.initialize_app(firebase_config)
+db = firebase.database()
+
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=1000, key="emg_refresh")   # refresh every 1 second
 
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
@@ -303,16 +318,15 @@ def smooth_emg(value):
 
 def read_emg():
     try:
-        r = requests.get("http://127.0.0.1:5000/emg")
-        data = r.json()
-
-        if len(data) > 0:
-            return data[-1]
-
-        return 0
-
-    except:
-        return 0
+        # order by key (timestamp) and fetch the last 1 record
+        latest = db.child("emg_data").order_by_key().limit_to_last(1).get()
+        if latest.each():
+            return float(latest.each().val())
+        else:
+            return 0.0
+    except Exception as e:
+        print(f"Firebase read error: {e}")
+        return 0.0
 
 def generate_ml_window(status):
     window_size = 200
