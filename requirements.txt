@@ -7,3 +7,4 @@ plotly
 pillow
 joblib
 pyrebase4
+streamlit-autofresh
