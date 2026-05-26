@@ -1,10 +1,11 @@
 streamlit
-flask
-requests
+pyrebase4
 pandas
 numpy
 plotly
-pillow
+requests
 joblib
-pyrebase4
-streamlit-autorefresh
+Pillows
+easyocr
+opencv-python
+torch
