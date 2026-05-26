@@ -238,6 +238,8 @@ ss_init("ml_probability", 0.0)
 ss_init("live_pain", 2)
 ss_init("live_fatigue", 4)
 ss_init("esp_state", None)   # stores the latest state from ESP32
+ss_init("esp_mode", None)
+ss_init("esp_channel", None)
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -286,7 +288,7 @@ def smooth_emg(value):
 def read_latest_emg_data():
     """
     Reads the latest EMG entry from Firebase.
-    Returns a tuple (emg_value, state_string) or (0.0, None) if no data.
+    Returns a tuple: (emg_value, state, mode, channel) or (0.0, None, None, None)
     """
     try:
         url = "https://ems-project-7ea46-default-rtdb.asia-southeast1.firebasedatabase.app/emg_data.json?orderBy=\"$key\"&limitToLast=1"
@@ -295,24 +297,24 @@ def read_latest_emg_data():
         if data:
             latest_key = list(data.keys())[-1]
             entry = data[latest_key]
-            # Try to get EMG value: first try "avg", then "emg", then first sample from "samples"
+            # EMG value: prefer "avg", then "emg", then last sample
             if "avg" in entry:
                 emg = float(entry["avg"])
             elif "emg" in entry:
                 emg = float(entry["emg"])
             elif "samples" in entry and len(entry["samples"]) > 0:
-                # If samples is a list, take the last sample
-                samples = entry["samples"]
-                emg = float(samples[-1])
+                emg = float(entry["samples"][-1])
             else:
                 emg = 0.0
             state = entry.get("state", None)
-            return emg, state
-        return 0.0, None
+            mode = entry.get("mode", None)
+            channel = entry.get("channel", None)
+            return emg, state, mode, channel
+        return 0.0, None, None, None
     except Exception as e:
         print(f"Firebase read error: {e}")
-        return 0.0, None
-
+        return 0.0, None, None, None
+        
 # Keep old read_emg for compatibility (but we'll update update_telemetry_stream)
 def read_emg():
     emg, _ = read_latest_emg_data()
@@ -361,21 +363,24 @@ def update_telemetry_stream():
     df = st.session_state.telemetry.copy()
     now = datetime.now().strftime("%H:%M:%S")
     if st.session_state.system_status == "ACTIVE":
-        raw_emg, esp_state = read_latest_emg_data()
+        raw_emg, esp_state, esp_mode, esp_channel = read_latest_emg_data()
         emg = smooth_emg(raw_emg)
         hr = int(np.clip(np.random.normal(74, 3), 60, 110))
         imp = float(np.clip(np.random.normal(1.2, 0.1), 0.7, 2.5))
-        # Store the state for display
         st.session_state.esp_state = esp_state
+        st.session_state.esp_mode = esp_mode
+        st.session_state.esp_channel = esp_channel
     else:
         emg = np.random.normal(0, 2)
         hr = int(np.random.normal(72, 2))
         imp = float(np.random.normal(1.2, 0.1))
         st.session_state.esp_state = None
+        st.session_state.esp_mode = None
+        st.session_state.esp_channel = None
     new_row = pd.DataFrame([{"t": now, "emg": emg, "hr": hr, "imp": imp}])
     df = pd.concat([df, new_row], ignore_index=True)
     st.session_state.telemetry = df.tail(200)
-
+    
 def generate_report(pid, mass_df, pain_df, fatigue_df):
     report_buffer = io.StringIO()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -735,17 +740,18 @@ if user_role == "Doctor":
         last_imp = tele['imp'].iloc[-1] if not tele.empty else 0
         recent_peak = tele['emg'].tail(50).max() if not tele.empty else 0
 
-        st.markdown("### Vital Signs & EMG Status")
+        st.markdown("### Session Status & EMG")
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1:
-            st.metric("🫀 Heart Rate", f"{last_hr} BPM", delta=None)
+            mode_value = st.session_state.esp_mode if st.session_state.esp_mode else "—"
+            st.metric("🎮 Mode", mode_value, delta=None)
         with col_m2:
-            st.metric("⚡ Impedance", f"{last_imp:.1f} kΩ", delta=None)
+            channel_value = st.session_state.esp_channel if st.session_state.esp_channel is not None else "—"
+            st.metric("🔢 Channel", channel_value, delta=None)
         with col_m3:
             st.metric("📈 Current EMG", f"{latest_emg:.1f} µV", delta=f"{latest_emg - tele['emg'].iloc[-2] if len(tele)>1 else 0:.1f}")
         with col_m4:
             st.metric("🔔 Peak (Session)", f"{recent_peak:.1f} µV")
-        st.markdown("---")
 
         st.markdown("### Real‑Time EMG Telemetry")
         fig = go.Figure()
