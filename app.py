@@ -240,6 +240,7 @@ ss_init("live_fatigue", 4)
 ss_init("esp_state", None)   # stores the latest state from ESP32
 ss_init("esp_mode", None)
 ss_init("esp_channel", None)
+ss_init("summary_generated", False)
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -269,7 +270,49 @@ def run_easyocr(uploaded_file):
     results = reader.readtext(image_np)
     extracted_text = [res[1] for res in results]
     return extracted_text
-   
+
+def read_session_end_flag():
+    """Reads the 'ended' flag from Firebase to know if the session finished."""
+    try:
+        url = "https://ems-project-7ea46-default-rtdb.asia-southeast1.firebasedatabase.app/session_state/ended.json"
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.json()
+        return False
+    except:
+        return False
+
+def generate_and_display_session_summary():
+    """Collects session data and generates an AI summary."""
+    tele = st.session_state.telemetry
+    if tele.empty:
+        st.session_state.session_summary = "No telemetry data available for this session."
+        return
+
+    avg_emg = tele['emg'].mean()
+    peak_emg = tele['emg'].max()
+    final_pain = st.session_state.live_pain
+    final_fatigue = st.session_state.live_fatigue
+    gait_result = st.session_state.ml_prediction
+    duration = st.session_state.elapsed_time
+
+    prompt = f"""
+    Clinical session summary for patient {patient_id}:
+    - Duration: {duration:.0f} seconds
+    - Average EMG: {avg_emg:.1f} µV
+    - Peak EMG: {peak_emg:.1f} µV
+    - Final pain score: {final_pain}/10
+    - Final fatigue score: {final_fatigue}/10
+    - Gait classification: {gait_result}
+    Provide a brief clinical interpretation and recommendations.
+    """
+
+    answer, _ = call_rag_api(prompt)   # reuse your existing RAG function
+    if not answer or "Error" in answer:
+        answer = "Could not generate AI summary. The RAG service may be offline."
+    
+    st.session_state.session_summary = answer
+    
 def predict_muscle_state(emg_value):
     if emg_value > 700:
         return ("Overexertion", "🔴", "High muscle stress detected")
@@ -722,6 +765,12 @@ if st.session_state.connected:
             st.session_state.ml_prediction = "NORMAL" if pred == 1 else "ABNORMAL"
             st.session_state.ml_probability = prob
 
+    # ---------- SESSION END DETECTION ----------
+    session_ended = read_session_end_flag()
+    if session_ended and not st.session_state.get("summary_generated", False):
+        generate_and_display_session_summary()
+        st.session_state.summary_generated = True
+
 # ==========================================
 # 10. INTERFACE – DOCTOR vs CAREGIVER
 # ==========================================
@@ -1047,6 +1096,14 @@ if user_role == "Doctor":
 
     # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
+        # ---------- AI SESSION SUMMARY ----------
+        if "session_summary" in st.session_state and st.session_state.session_summary:
+           with st.expander("📝 AI Session Summary", expanded=True):
+                st.markdown(st.session_state.session_summary)
+                if st.button("Regenerate Summary"):
+                    st.session_state.summary_generated = False
+                    st.rerun()
+                    
         # Segmental Lean Mass Analysis 
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("💪 Segmental Lean Mass Analysis ")
