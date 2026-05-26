@@ -243,18 +243,17 @@ ss_init("esp_state", None)   # stores the latest state from ESP32
 # 4. HELPER FUNCTIONS
 # ==========================================
 @st.cache_resource
-def load_easyocr():
-    return easyocr.Reader(['en'])
-
-reader = load_easyocr()
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    st.warning("OCR features are disabled in this deployment (easyocr not installed).")
 
 def run_easyocr(uploaded_file):
-    image = Image.open(uploaded_file)
-    image_np = np.array(image)
-    results = reader.readtext(image_np)
-    extracted_text = [res[1] for res in results]
-    return extracted_text
-
+    if not EASYOCR_AVAILABLE:
+        return ["OCR not available – please install easyocr locally."]
+   
 def predict_muscle_state(emg_value):
     if emg_value > 700:
         return ("Overexertion", "🔴", "High muscle stress detected")
