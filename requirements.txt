@@ -6,5 +6,6 @@ plotly
 requests
 joblib
 Pillow
+scikit-learn
 easyocr
-opencv-python-headless   # required by easyocr (lighter than full opencv)
+opencv-python-headless
