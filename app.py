@@ -201,19 +201,32 @@ def read_logs(patient_id, limit=200):
 
 init_db()
 
-@st.cache_resource
-def load_model_assets():
-    try:
-        model = joblib.load("model.pkl")
-        with open("feature_cols.json", "r") as f:
-            features = json.load(f)
-        return model, features, "Online"
-    except FileNotFoundError:
-        return None, None, "Offline (Files Missing)"
-    except Exception as e:
-        return None, None, f"Error: {e}"
+ML_API_URL = "https://escargot-coastline-tingling.ngrok-free.dev"
 
-rf_model, feature_names, model_status = load_model_assets()
+def call_ml_api(rms_value, spread_value, std_value):
+    """
+    Send computed features to the ML endpoint.
+    Returns: (prediction, confidence, summary_dict)
+    """
+    try:
+        payload = {
+            "rms": rms_value,
+            "spread": spread_value,
+            "std": std_value
+        }
+        response = requests.post(ML_API_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            print("ML API response:", data)
+            prediction = data.get("prediction", "Unknown")
+            confidence = data.get("confidence", 0.0)
+            summary = data.get("summary", {})
+            # Also store probabilities and session stats if needed
+            return prediction, confidence, summary
+        else:
+            return f"Error {response.status_code}", 0.0, {}
+    except Exception as e:
+        return f"API error: {str(e)}", 0.0, {}
 
 # ==========================================
 # 3. SESSION STATE
@@ -240,79 +253,62 @@ ss_init("live_fatigue", 4)
 ss_init("esp_state", None)   # stores the latest state from ESP32
 ss_init("esp_mode", None)
 ss_init("esp_channel", None)
-ss_init("summary_generated", False)
+ss_init("ml_summary", {})
+ss_init("session_summary_generated", False)
+ss_init("session_summary_text", "")
 
 # ==========================================
 # 4. HELPER FUNCTIONS
 # ==========================================
-
-# --- OCR availability check (without decorator) ---
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except ImportError:
-    EASYOCR_AVAILABLE = False
-    st.warning("OCR features are disabled in this deployment (easyocr not installed).")
-
 @st.cache_resource
 def load_easyocr():
-    if EASYOCR_AVAILABLE:
-        return easyocr.Reader(['en'])
-    return None
+    return easyocr.Reader(['en'])
 
 reader = load_easyocr()
 
+def generate_session_summary():
+    tele = st.session_state.telemetry
+    if tele.empty:
+        st.session_state.session_summary_text = "No telemetry data collected during this session."
+        return
+
+    # Compute session stats
+    avg_emg = tele['emg'].mean()
+    max_emg = tele['emg'].max()
+    min_emg = tele['emg'].min()
+    duration = st.session_state.elapsed_time  # in seconds
+    pain = st.session_state.live_pain
+    fatigue = st.session_state.live_fatigue
+    gait = st.session_state.ml_prediction  # "NORMAL" or "ABNORMAL"
+    
+    # Build prompt for RAG API
+    prompt = f"""
+    You are a clinical assistant. Write a short, professional summary of the following EMS therapy session:
+
+    - Duration: {duration:.0f} seconds (approx {duration/60:.1f} minutes)
+    - Average EMG: {avg_emg:.1f} µV
+    - Maximum EMG: {max_emg:.1f} µV
+    - Minimum EMG: {min_emg:.1f} µV
+    - Final patient pain score: {pain}/10
+    - Final patient fatigue score: {fatigue}/10
+    - Gait pathology classification: {gait}
+    
+    Provide a conclusion and any recommendations.
+    """
+    
+    answer, _ = call_rag_api(prompt)
+    if not answer or "Error" in answer:
+        answer = "Could not generate AI summary. The RAG service may be offline."
+    
+    st.session_state.session_summary_text = answer
+
 def run_easyocr(uploaded_file):
-    if not EASYOCR_AVAILABLE or reader is None:
-        return ["OCR not available – please install easyocr locally."]
     image = Image.open(uploaded_file)
     image_np = np.array(image)
     results = reader.readtext(image_np)
     extracted_text = [res[1] for res in results]
     return extracted_text
 
-def read_session_end_flag():
-    """Reads the 'ended' flag from Firebase to know if the session finished."""
-    try:
-        url = "https://ems-project-7ea46-default-rtdb.asia-southeast1.firebasedatabase.app/session_state/ended.json"
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.json()
-        return False
-    except:
-        return False
-
-def generate_and_display_session_summary():
-    """Collects session data and generates an AI summary."""
-    tele = st.session_state.telemetry
-    if tele.empty:
-        st.session_state.session_summary = "No telemetry data available for this session."
-        return
-
-    avg_emg = tele['emg'].mean()
-    peak_emg = tele['emg'].max()
-    final_pain = st.session_state.live_pain
-    final_fatigue = st.session_state.live_fatigue
-    gait_result = st.session_state.ml_prediction
-    duration = st.session_state.elapsed_time
-
-    prompt = f"""
-    Clinical session summary for patient {patient_id}:
-    - Duration: {duration:.0f} seconds
-    - Average EMG: {avg_emg:.1f} µV
-    - Peak EMG: {peak_emg:.1f} µV
-    - Final pain score: {final_pain}/10
-    - Final fatigue score: {final_fatigue}/10
-    - Gait classification: {gait_result}
-    Provide a brief clinical interpretation and recommendations.
-    """
-
-    answer, _ = call_rag_api(prompt)   # reuse your existing RAG function
-    if not answer or "Error" in answer:
-        answer = "Could not generate AI summary. The RAG service may be offline."
-    
-    st.session_state.session_summary = answer
-    
 def predict_muscle_state(emg_value):
     if emg_value > 700:
         return ("Overexertion", "🔴", "High muscle stress detected")
@@ -357,7 +353,7 @@ def read_latest_emg_data():
     except Exception as e:
         print(f"Firebase read error: {e}")
         return 0.0, None, None, None
-        
+
 # Keep old read_emg for compatibility (but we'll update update_telemetry_stream)
 def read_emg():
     emg, _ = read_latest_emg_data()
@@ -381,27 +377,6 @@ def call_rag_api(question: str) -> tuple:
     except Exception as e:
         return f"Error: {str(e)}", []
 
-def generate_ml_window(status):
-    window_size = 200
-    noise_level = 0.5
-    data = {}
-    muscles = ["Recto Femoral", "Biceps Femoral", "Vasto Medial", "EMG Semitendinoso"]
-    for muscle in muscles:
-        t = np.linspace(0, 10, window_size)
-        base = np.sin(t) * 5 + np.random.normal(0, noise_level, window_size)
-        if status == "Risk (Abnormal)":
-            base = base * np.random.uniform(1.5, 3.0) + np.random.normal(0, 2, window_size)
-        data[muscle] = base
-    return pd.DataFrame(data)
-
-def extract_features(raw_window_df):
-    feats = {}
-    feats['rms_recto_femoral'] = np.sqrt(np.mean(raw_window_df["Recto Femoral"]**2))
-    feats['rms_biceps_femoral'] = np.sqrt(np.mean(raw_window_df["Biceps Femoral"]**2))
-    feats['rms_vasto_medial'] = np.sqrt(np.mean(raw_window_df["Vasto Medial"]**2))
-    feats['rms_emg_semitendinoso'] = np.sqrt(np.mean(raw_window_df["EMG Semitendinoso"]**2))
-    return pd.DataFrame([feats])
-
 def update_telemetry_stream():
     df = st.session_state.telemetry.copy()
     now = datetime.now().strftime("%H:%M:%S")
@@ -423,7 +398,7 @@ def update_telemetry_stream():
     new_row = pd.DataFrame([{"t": now, "emg": emg, "hr": hr, "imp": imp}])
     df = pd.concat([df, new_row], ignore_index=True)
     st.session_state.telemetry = df.tail(200)
-    
+
 def generate_report(pid, mass_df, pain_df, fatigue_df):
     report_buffer = io.StringIO()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -647,7 +622,7 @@ def show_intensity_confirmation(pid, new_val):
 # ==========================================
 with st.sidebar:
     st.title("AI-Enhanced EMS System")
-    st.caption(f"ML Engine: {model_status}")
+    st.caption(f"ML Engine: Remote API")
     st.divider()
     st.subheader("Patient Profile")
     patient_id = st.text_input("Patient ID", value="PT-2024-89")
@@ -662,6 +637,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Session Control")
     protocol = st.selectbox("Protocol", ["Muscle Stimulation"])
+    
 
 # Additional button styling (kept)
 st.markdown("""
@@ -753,23 +729,30 @@ with col_stop:
 # 9. MAIN LOGIC LOOP (Telemetry & ML update)
 # ==========================================
 if st.session_state.connected:
+    # 1. Update telemetry from Firebase
     update_telemetry_stream()
-    if st.session_state.system_status == "ACTIVE":
-        raw_ml_df = generate_ml_window(sim_mode)
-        st.session_state.ml_window = raw_ml_df
-        if rf_model:
-            feats = extract_features(raw_ml_df)
-            feats = feats[feature_names]
-            pred = rf_model.predict(feats)[0]
-            prob = rf_model.predict_proba(feats)[0][1]
-            st.session_state.ml_prediction = "NORMAL" if pred == 1 else "ABNORMAL"
-            st.session_state.ml_probability = prob
+    print("Latest EMG:", st.session_state.telemetry['emg'].iloc[-1] if not st.session_state.telemetry.empty else "No data")
 
-    # ---------- SESSION END DETECTION ----------
-    session_ended = read_session_end_flag()
-    if session_ended and not st.session_state.get("summary_generated", False):
-        generate_and_display_session_summary()
-        st.session_state.summary_generated = True
+    # 2. If session is active, run ML prediction on recent EMG values
+    if st.session_state.system_status == "ACTIVE":
+        emg_values = st.session_state.telemetry['emg'].tail(50).values
+        if len(emg_values) > 0:
+            rms = np.sqrt(np.mean(emg_values**2))
+            spread = np.max(emg_values) - np.min(emg_values)
+            std = np.std(emg_values)
+            prediction, confidence, summary = call_ml_api(rms, spread, std)
+            st.session_state.ml_prediction = prediction
+            st.session_state.ml_probability = confidence / 100.0
+            st.session_state.ml_summary = summary
+        else:
+            st.session_state.ml_prediction = "WAITING"
+            st.session_state.ml_probability = 0.0
+            st.session_state.ml_summary = {}
+
+    # 3. Detect session end and generate AI summary (once)
+    if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
+        generate_session_summary()
+        st.session_state.session_summary_generated = True
 
 # ==========================================
 # 10. INTERFACE – DOCTOR vs CAREGIVER
@@ -842,14 +825,26 @@ if user_role == "Doctor":
             res = st.session_state.ml_prediction
             prob = st.session_state.ml_probability
             if st.session_state.system_status == "ACTIVE":
-                if res == "ABNORMAL":
+                if res == "ABNORMAL" or res == "Abnormal":   # handle case
                     st.markdown(f"""<div class="alert-box alert-risk"><h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3><p>Confidence: {prob:.1%}</p><hr><p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p></div>""", unsafe_allow_html=True)
                 else:
                     st.markdown(f"""<div class="alert-box alert-safe"><h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3><p>Confidence: {prob:.1%}</p><hr><p><strong>Recommendation:</strong> Continue current protocol.</p></div>""", unsafe_allow_html=True)
-                with st.expander("View Raw Features"):
-                    if st.session_state.ml_window is not None:
-                        feat_view = extract_features(st.session_state.ml_window)
-                        st.dataframe(feat_view, hide_index=True)
+
+                # Display AI summary from the API (if available)
+                if st.session_state.ml_summary:
+                    with st.expander("📋 AI Summary & Recommendations"):
+                        summary = st.session_state.ml_summary
+                        st.markdown(f"**{summary.get('title', '')}**")
+                        st.markdown(summary.get('summary', ''))
+                        if summary.get('interpretation'):
+                            st.markdown("**Interpretation:**")
+                            for item in summary['interpretation']:
+                                st.markdown(f"- {item}")
+                        if summary.get('actions'):
+                            st.markdown("**Recommended Actions:**")
+                            for item in summary['actions']:
+                                st.markdown(f"- {item}")
+                        st.caption(summary.get('disclaimer', ''))
             else:
                 st.info("Start session to enable ML analysis.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -1069,41 +1064,18 @@ if user_role == "Doctor":
         else:
             st.warning("Intensity adjustments are locked for Caregiver role.")
         st.markdown('</div>', unsafe_allow_html=True)
-        with st.expander("📝 Manual Gait Assessment (Enter RMS values)"):
-            st.markdown("Enter RMS values (in µV) for the four muscles to predict gait pathology. The model is the same as used in the real‑time analysis.")
-            if rf_model is None:
-                st.error("ML model not available. Please check model.pkl and feature_cols.json")
-            else:
-                col1, col2 = st.columns(2)
-                with col1:
-                    rms_rf = st.number_input("Recto Femoral RMS (µV)", value=0.32, step=0.01, format="%.2f")
-                    rms_bf = st.number_input("Biceps Femoral RMS (µV)", value=0.30, step=0.01, format="%.2f")
-                with col2:
-                    rms_vm = st.number_input("Vasto Medial RMS (µV)", value=0.35, step=0.01, format="%.2f")
-                    rms_es = st.number_input("EMG Semitendinoso RMS (µV)", value=0.28, step=0.01, format="%.2f")
-                if st.button("🔍 Predict Gait State", type="primary"):
-                    features = [rms_rf, rms_bf, rms_vm, rms_es]
-                    X_input = np.array([features])
-                    prediction = rf_model.predict(X_input)[0]
-                    proba = rf_model.predict_proba(X_input)[0]
-                    if prediction == 1:
-                        st.markdown(f"""<div class="alert-box alert-risk"><h3>⚠️ ABNORMAL GAIT PATTERN DETECTED</h3><p><strong>Confidence:</strong> {proba[1]:.1%}</p><p><strong>Recommendation:</strong> Evaluate electrode placement, reduce frequency, or consult clinical guidelines.</p></div>""", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""<div class="alert-box alert-safe"><h3>✅ NORMAL GAIT PATTERN</h3><p><strong>Confidence:</strong> {proba[0]:.1%}</p><p><strong>Recommendation:</strong> Continue current protocol.</p></div>""", unsafe_allow_html=True)
-                    with st.expander("📊 Model Confidence Details"):
-                        st.write(f"Probability Normal:   {proba[0]:.2%}")
-                        st.write(f"Probability Abnormal: {proba[1]:.2%}")
-
+        
     # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
-        # ---------- AI SESSION SUMMARY ----------
-        if "session_summary" in st.session_state and st.session_state.session_summary:
-           with st.expander("📝 AI Session Summary", expanded=True):
-                st.markdown(st.session_state.session_summary)
-                if st.button("Regenerate Summary"):
-                    st.session_state.summary_generated = False
-                    st.rerun()
-                    
+        if st.session_state.session_summary_text:
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("📝 AI Session Summary")
+            st.markdown(st.session_state.session_summary_text)
+            if st.button("Regenerate Summary", key="regenerate_summary"):
+                st.session_state.session_summary_generated = False
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
         # Segmental Lean Mass Analysis 
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("💪 Segmental Lean Mass Analysis ")
@@ -1559,3 +1531,4 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
 if st.session_state.system_status == "ACTIVE":
     time.sleep(0.2)
     st.rerun()
+
