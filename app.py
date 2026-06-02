@@ -287,12 +287,15 @@ ss_init("ml_summary", {})
 ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
-ML_CALL_INTERVAL = 5  # seconds between ML API calls
+ML_CALL_INTERVAL = 2  # seconds between ML API calls
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
+ss_init("last_ml_summary_snapshot", {})  # snapshot of ml_summary at session end
+
+SESSION_DURATION_MINUTES = 20   # fixed protocol duration in minutes
 
 # Process-level shared state for background ML thread ↔ main loop communication.
 # st.cache_resource survives all reruns and is guaranteed to return the same object.
@@ -321,10 +324,12 @@ def generate_session_summary():
     avg_emg  = tele['emg'].mean()
     max_emg  = tele['emg'].max()
     min_emg  = tele['emg'].min()
-    duration = st.session_state.elapsed_time   # seconds — accumulated correctly on STOP
     pain     = st.session_state.live_pain
     fatigue  = st.session_state.live_fatigue
     gait     = st.session_state.ml_prediction
+
+    # Snapshot the latest ML summary for display in Records tab
+    st.session_state.last_ml_summary_snapshot = dict(st.session_state.get("ml_summary", {}))
 
     # ML session stats if available
     ml_session = st.session_state.get("ml_session", {})
@@ -334,15 +339,14 @@ def generate_session_summary():
     std_val    = ml_latest.get("rms_signal_std", "N/A")
     readings   = ml_session.get("count", "N/A")
 
-    mins = duration / 60
     prompt = f"""You are a clinical physiotherapy assistant writing a structured EMS session report.
 
 PATIENT: {patient_id} | Age group: {age_group} | Conditions: {', '.join(condition_tags) if condition_tags else 'None recorded'}
 PROTOCOL: {protocol}
 
 SESSION DATA (do NOT alter these numbers):
-- Session duration: {duration:.0f} seconds = {mins:.1f} minutes exactly
-- EMG readings: {readings} samples
+- Session duration: {SESSION_DURATION_MINUTES} minutes exactly
+- EMG readings collected: {readings} samples
 - EMG average: {avg_emg:.1f} µV | max: {max_emg:.1f} µV | min: {min_emg:.1f} µV
 - Recto femoris RMS (last window): {rms_val} µV
 - Signal spread (last window): {spread_val}
@@ -352,10 +356,10 @@ SESSION DATA (do NOT alter these numbers):
 - Final fatigue score: {fatigue}/10
 
 Write a concise clinical session summary (3–4 sentences) covering:
-1. Session duration and protocol applied (use the exact duration above)
+1. Session duration and protocol applied (use exactly {SESSION_DURATION_MINUTES} minutes)
 2. EMG activity observed and what it indicates for this patient's condition
 3. Patient-reported comfort (pain/fatigue) and how it relates to the EMG findings
-4. Specific recommendations for the NEXT session based on gait result ({gait}) and the patient's conditions ({', '.join(condition_tags) if condition_tags else 'general rehabilitation'})
+4. Specific next-session recommendations based on gait result ({gait}) and conditions ({', '.join(condition_tags) if condition_tags else 'general rehabilitation'})
 
 Do NOT use generic advice. Base every recommendation on the actual data above.
 Do NOT use citation numbers like [1]. Write in plain clinical prose."""
@@ -1097,23 +1101,7 @@ if user_role == "Doctor":
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-
-                    # ── AI Summary expander ────────────────────────────────────
-                    if summary:
-                        with st.expander("📋 AI Summary & Recommendations"):
-                            st.markdown(f"**{summary.get('title', '')}**")
-                            st.markdown(summary.get('summary', ''))
-                            if summary.get('interpretation'):
-                                st.markdown("**Interpretation**")
-                                for item in summary['interpretation']:
-                                    st.markdown(f"- {item}")
-                            if summary.get('actions'):
-                                st.markdown("**Recommended Actions**")
-                                for item in summary['actions']:
-                                    st.markdown(f"- {item}")
-                            disclaimer = summary.get('disclaimer', '')
-                            if disclaimer:
-                                st.caption(f"*Note: {disclaimer}*")
+                    st.caption("📋 Full AI analysis available in the **Records & Reports** tab after session ends.")
 
             else:
                 st.info("Start session to enable ML analysis.")
@@ -1325,8 +1313,94 @@ if user_role == "Doctor":
         if st.session_state.session_summary_text:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("📝 AI Session Summary")
+
+            # ── Session stats header row ──────────────────────────────────
+            tele_snap = st.session_state.telemetry
+            ml_snap   = st.session_state.last_ml_summary_snapshot
+            ml_sess   = st.session_state.get("ml_session", {})
+            ml_lat    = st.session_state.get("ml_latest", {})
+            gait_res  = st.session_state.ml_prediction
+            is_abn    = gait_res in ("ABNORMAL", "Abnormal")
+
+            stat_cols = st.columns(5)
+            stat_cols[0].metric("⏱️ Duration",   f"{SESSION_DURATION_MINUTES} min")
+            stat_cols[1].metric("📈 Avg EMG",    f"{tele_snap['emg'].mean():.1f} µV" if not tele_snap.empty else "—")
+            stat_cols[2].metric("🦶 Gait Result", gait_res)
+            stat_cols[3].metric("😣 Pain",        f"{st.session_state.live_pain}/10")
+            stat_cols[4].metric("😴 Fatigue",     f"{st.session_state.live_fatigue}/10")
+
+            st.divider()
+
+            # ── Clinical session summary (from RAG) ───────────────────────
+            st.markdown("#### 🏥 Clinical Session Summary")
             st.markdown(st.session_state.session_summary_text)
-            if st.button("Regenerate Summary", key="regenerate_summary"):
+
+            # ── ML Signal Analysis (from ML API summary) ──────────────────
+            if ml_snap:
+                st.divider()
+                st.markdown("#### 🤖 ML Signal Analysis")
+
+                # Gait result badge
+                badge_color = "#C62828" if is_abn else "#2E7D32"
+                badge_bg    = "#FFEBEE" if is_abn else "#E8F5E9"
+                conf_pct    = st.session_state.ml_probability
+                conf_pct    = conf_pct * 100 if conf_pct <= 1.0 else conf_pct
+                st.markdown(f"""
+                <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+                    <div style="background:{badge_bg}; border:1px solid {badge_color};
+                                border-radius:10px; padding:8px 18px;">
+                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
+                                     letter-spacing:0.06em;">PREDICTED CLASS</span><br>
+                        <span style="font-size:1.2rem; font-weight:800;
+                                     color:{badge_color};">{gait_res}</span>
+                    </div>
+                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
+                                border-radius:10px; padding:8px 18px;">
+                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
+                                     letter-spacing:0.06em;">CONFIDENCE</span><br>
+                        <span style="font-size:1.2rem; font-weight:800;
+                                     color:#1E293B;">{conf_pct:.1f}%</span>
+                    </div>
+                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
+                                border-radius:10px; padding:8px 18px;">
+                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
+                                     letter-spacing:0.06em;">RF RMS</span><br>
+                        <span style="font-size:1.2rem; font-weight:800;
+                                     color:#1E293B;">{ml_lat.get('rms_recto_femoral', '—')}</span>
+                    </div>
+                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
+                                border-radius:10px; padding:8px 18px;">
+                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
+                                     letter-spacing:0.06em;">READINGS</span><br>
+                        <span style="font-size:1.2rem; font-weight:800;
+                                     color:#1E293B;">{ml_sess.get('count', '—')}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if ml_snap.get('title'):
+                    st.markdown(f"**{ml_snap.get('title', '')}**")
+                if ml_snap.get('summary'):
+                    st.markdown(f"<p style='font-size:0.88rem; color:#475569; line-height:1.7'>{ml_snap.get('summary','')}</p>", unsafe_allow_html=True)
+
+                col_interp, col_actions = st.columns(2)
+                with col_interp:
+                    if ml_snap.get('interpretation'):
+                        st.markdown("**Signal Interpretation**")
+                        for item in ml_snap['interpretation']:
+                            st.markdown(f"- {item}")
+                with col_actions:
+                    if ml_snap.get('actions'):
+                        st.markdown("**Recommended Actions**")
+                        for item in ml_snap['actions']:
+                            st.markdown(f"- {item}")
+
+                disclaimer = ml_snap.get('disclaimer', '')
+                if disclaimer:
+                    st.caption(f"*⚠️ Note: {disclaimer}*")
+
+            st.divider()
+            if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
                 st.session_state.session_summary_generated = False
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
