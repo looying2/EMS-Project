@@ -201,32 +201,61 @@ def read_logs(patient_id, limit=200):
 
 init_db()
 
-ML_API_URL = "https://escargot-coastline-tingling.ngrok-free.dev"
+ML_API_URL = "https://escargot-coastline-tingling.ngrok-free.dev/api/start-monitoring"
 
-def call_ml_api(rms_value, spread_value, std_value):
+def call_ml_api():
     """
-    Send computed features to the ML endpoint.
-    Returns: (prediction, confidence, summary_dict)
+    Remote ML backend reads latest Firebase EMG data automatically.
+    Returns:
+        prediction: str
+        confidence_fraction: float, 0 to 1
+        summary: dict
+        latest: dict
+        probabilities: list
+        session: dict
     """
+
     try:
-        payload = {
-            "rms": rms_value,
-            "spread": spread_value,
-            "std": std_value
-        }
-        response = requests.post(ML_API_URL, json=payload, timeout=10)
-        if response.status_code == 200:
+        response = requests.post(
+            ML_API_URL,
+            json={},
+            timeout=20,
+            verify=False
+        )
+
+        # Debugging
+        print("ML status:", response.status_code)
+        print("ML raw response:", response.text[:500])
+
+        if response.status_code != 200:
+            return f"API Error {response.status_code}", 0.0, {}, {}, [], {}
+
+        try:
             data = response.json()
-            print("ML API response:", data)
-            prediction = data.get("prediction", "Unknown")
-            confidence = data.get("confidence", 0.0)
-            summary = data.get("summary", {})
-            # Also store probabilities and session stats if needed
-            return prediction, confidence, summary
-        else:
-            return f"Error {response.status_code}", 0.0, {}
+        except Exception:
+            return "Invalid API Response", 0.0, {}, {}, [], {}
+
+        prediction = data.get("prediction", "Unknown")
+
+        confidence = float(data.get("confidence", 0.0))
+        if confidence > 1:
+            confidence = confidence / 100.0
+
+        latest = data.get("latest", {})
+        probabilities = data.get("probabilities", [])
+        session = data.get("session", {})
+        summary = data.get("summary", {})
+
+        return prediction, confidence, summary, latest, probabilities, session
+
+    except requests.exceptions.Timeout:
+        return "API Timeout", 0.0, {}, {}, [], {}
+
+    except requests.exceptions.ConnectionError:
+        return "API Offline", 0.0, {}, {}, [], {}
+
     except Exception as e:
-        return f"API error: {str(e)}", 0.0, {}
+        return f"API Error: {str(e)}", 0.0, {}, {}, [], {}
 
 # ==========================================
 # 3. SESSION STATE
@@ -256,6 +285,10 @@ ss_init("esp_channel", None)
 ss_init("ml_summary", {})
 ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
+ss_init("last_ml_call_time", 0)
+ss_init("ml_latest", {})
+ss_init("ml_probabilities", [])
+ss_init("ml_session", {})
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -381,13 +414,26 @@ def update_telemetry_stream():
     df = st.session_state.telemetry.copy()
     now = datetime.now().strftime("%H:%M:%S")
     if st.session_state.system_status == "ACTIVE":
-        raw_emg, esp_state, esp_mode, esp_channel = read_latest_emg_data()
-        emg = smooth_emg(raw_emg)
-        hr = int(np.clip(np.random.normal(74, 3), 60, 110))
-        imp = float(np.clip(np.random.normal(1.2, 0.1), 0.7, 2.5))
-        st.session_state.esp_state = esp_state
-        st.session_state.esp_mode = esp_mode
-        st.session_state.esp_channel = esp_channel
+
+    current_time = time.time()
+
+    # Call remote ML backend every 3 seconds only
+    if st.session_state.system_status == "ACTIVE":
+
+    current_time = time.time()
+
+    # Call ML backend every 3 seconds only
+    if current_time - st.session_state.last_ml_call_time >= 3:
+
+        prediction, confidence, summary, latest, probabilities, session = call_ml_api()
+
+        st.session_state.ml_prediction = prediction
+        st.session_state.ml_probability = confidence
+        st.session_state.ml_summary = summary
+        st.session_state.ml_latest = latest
+        st.session_state.ml_probabilities = probabilities
+        st.session_state.ml_session = session
+        st.session_state.last_ml_call_time = current_time
     else:
         emg = np.random.normal(0, 2)
         hr = int(np.random.normal(72, 2))
@@ -742,7 +788,7 @@ if st.session_state.connected:
             std = np.std(emg_values)
             prediction, confidence, summary = call_ml_api(rms, spread, std)
             st.session_state.ml_prediction = prediction
-            st.session_state.ml_probability = confidence / 100.0
+            st.session_state.ml_probability = confidence 
             st.session_state.ml_summary = summary
         else:
             st.session_state.ml_prediction = "WAITING"
@@ -820,34 +866,113 @@ if user_role == "Doctor":
                 st.caption("System Inactive - Start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
         with col_ml:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("Gait Pathology (ML Engine)")
-            res = st.session_state.ml_prediction
-            prob = st.session_state.ml_probability
-            if st.session_state.system_status == "ACTIVE":
-                if res == "ABNORMAL" or res == "Abnormal":   # handle case
-                    st.markdown(f"""<div class="alert-box alert-risk"><h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3><p>Confidence: {prob:.1%}</p><hr><p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p></div>""", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""<div class="alert-box alert-safe"><h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3><p>Confidence: {prob:.1%}</p><hr><p><strong>Recommendation:</strong> Continue current protocol.</p></div>""", unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("Gait Pathology (ML Engine)")
 
-                # Display AI summary from the API (if available)
-                if st.session_state.ml_summary:
-                    with st.expander("📋 AI Summary & Recommendations"):
-                        summary = st.session_state.ml_summary
-                        st.markdown(f"**{summary.get('title', '')}**")
-                        st.markdown(summary.get('summary', ''))
-                        if summary.get('interpretation'):
-                            st.markdown("**Interpretation:**")
-                            for item in summary['interpretation']:
-                                st.markdown(f"- {item}")
-                        if summary.get('actions'):
-                            st.markdown("**Recommended Actions:**")
-                            for item in summary['actions']:
-                                st.markdown(f"- {item}")
-                        st.caption(summary.get('disclaimer', ''))
-            else:
-                st.info("Start session to enable ML analysis.")
-            st.markdown('</div>', unsafe_allow_html=True)
+    res = st.session_state.ml_prediction
+    prob = st.session_state.ml_probability
+
+    if st.session_state.system_status == "ACTIVE":
+
+        # ===============================
+        # MAIN ML RESULT CARD
+        # ===============================
+        if res == "ABNORMAL" or res == "Abnormal":
+            st.markdown(f"""
+            <div class="alert-box alert-risk">
+                <h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3>
+                <p>Confidence: {prob:.1%}</p>
+                <hr>
+                <p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="alert-box alert-safe">
+                <h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3>
+                <p>Confidence: {prob:.1%}</p>
+                <hr>
+                <p><strong>Recommendation:</strong> Continue current protocol.</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # ===============================
+        # ADD THIS PART HERE
+        # ===============================
+        latest = st.session_state.get("ml_latest", {})
+        session = st.session_state.get("ml_session", {})
+        probabilities = st.session_state.get("ml_probabilities", [])
+
+        if latest:
+            st.markdown("#### Latest ML Features")
+
+            f1, f2, f3 = st.columns(3)
+
+            with f1:
+                st.metric(
+                    "Recto Femoris RMS",
+                    f"{latest.get('rms_recto_femoral', 0):.2f}"
+                )
+
+            with f2:
+                st.metric(
+                    "Signal Spread",
+                    f"{latest.get('rms_signal_spread', 0):.2f}"
+                )
+
+            with f3:
+                st.metric(
+                    "Signal STD",
+                    f"{latest.get('rms_signal_std', 0):.2f}"
+                )
+
+        if probabilities:
+            st.markdown("#### Prediction Probability")
+
+            for p in probabilities:
+                label = p.get("label", "Unknown")
+                probability = float(p.get("probability", 0))
+
+                st.progress(
+                    probability / 100,
+                    text=f"{label}: {probability:.2f}%"
+                )
+
+        if session:
+            st.markdown("#### Session Summary")
+
+            st.write(
+                f"Readings: {session.get('count', '-')}"
+                f" | Average: {session.get('avg', '-')}"
+                f" | Min: {session.get('min', '-')}"
+                f" | Max: {session.get('max', '-')}"
+            )
+
+        # ===============================
+        # EXISTING AI SUMMARY
+        # ===============================
+        if st.session_state.ml_summary:
+            with st.expander("📋 AI Summary & Recommendations"):
+                summary = st.session_state.ml_summary
+                st.markdown(f"**{summary.get('title', '')}**")
+                st.markdown(summary.get('summary', ''))
+
+                if summary.get('interpretation'):
+                    st.markdown("**Interpretation:**")
+                    for item in summary['interpretation']:
+                        st.markdown(f"- {item}")
+
+                if summary.get('actions'):
+                    st.markdown("**Recommended Actions:**")
+                    for item in summary['actions']:
+                        st.markdown(f"- {item}")
+
+                st.caption(summary.get('disclaimer', ''))
+
+    else:
+        st.info("Start session to enable ML analysis.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("### 💬 Patient Feedback")
