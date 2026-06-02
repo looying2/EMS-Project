@@ -318,33 +318,52 @@ def generate_session_summary():
         return
 
     # Compute session stats
-    avg_emg = tele['emg'].mean()
-    max_emg = tele['emg'].max()
-    min_emg = tele['emg'].min()
-    duration = st.session_state.elapsed_time  # in seconds
-    pain = st.session_state.live_pain
-    fatigue = st.session_state.live_fatigue
-    gait = st.session_state.ml_prediction  # "NORMAL" or "ABNORMAL"
-    
-    # Build prompt for RAG API
-    prompt = f"""
-    You are a clinical assistant. Write a short, professional summary of the following EMS therapy session:
+    avg_emg  = tele['emg'].mean()
+    max_emg  = tele['emg'].max()
+    min_emg  = tele['emg'].min()
+    duration = st.session_state.elapsed_time   # seconds — accumulated correctly on STOP
+    pain     = st.session_state.live_pain
+    fatigue  = st.session_state.live_fatigue
+    gait     = st.session_state.ml_prediction
 
-    - Duration: {duration:.0f} seconds (approx {duration/60:.1f} minutes)
-    - Average EMG: {avg_emg:.1f} µV
-    - Maximum EMG: {max_emg:.1f} µV
-    - Minimum EMG: {min_emg:.1f} µV
-    - Final patient pain score: {pain}/10
-    - Final patient fatigue score: {fatigue}/10
-    - Gait pathology classification: {gait}
-    
-    Provide a conclusion and any recommendations.
-    """
-    
+    # ML session stats if available
+    ml_session = st.session_state.get("ml_session", {})
+    ml_latest  = st.session_state.get("ml_latest", {})
+    rms_val    = ml_latest.get("rms_recto_femoral", "N/A")
+    spread_val = ml_latest.get("rms_signal_spread", "N/A")
+    std_val    = ml_latest.get("rms_signal_std", "N/A")
+    readings   = ml_session.get("count", "N/A")
+
+    mins = duration / 60
+    prompt = f"""You are a clinical physiotherapy assistant writing a structured EMS session report.
+
+PATIENT: {patient_id} | Age group: {age_group} | Conditions: {', '.join(condition_tags) if condition_tags else 'None recorded'}
+PROTOCOL: {protocol}
+
+SESSION DATA (do NOT alter these numbers):
+- Session duration: {duration:.0f} seconds = {mins:.1f} minutes exactly
+- EMG readings: {readings} samples
+- EMG average: {avg_emg:.1f} µV | max: {max_emg:.1f} µV | min: {min_emg:.1f} µV
+- Recto femoris RMS (last window): {rms_val} µV
+- Signal spread (last window): {spread_val}
+- Signal STD (last window): {std_val}
+- Gait classification result: {gait}
+- Final pain score: {pain}/10
+- Final fatigue score: {fatigue}/10
+
+Write a concise clinical session summary (3–4 sentences) covering:
+1. Session duration and protocol applied (use the exact duration above)
+2. EMG activity observed and what it indicates for this patient's condition
+3. Patient-reported comfort (pain/fatigue) and how it relates to the EMG findings
+4. Specific recommendations for the NEXT session based on gait result ({gait}) and the patient's conditions ({', '.join(condition_tags) if condition_tags else 'general rehabilitation'})
+
+Do NOT use generic advice. Base every recommendation on the actual data above.
+Do NOT use citation numbers like [1]. Write in plain clinical prose."""
+
     answer, _ = call_rag_api(prompt)
     if not answer or "Error" in answer:
         answer = "Could not generate AI summary. The RAG service may be offline."
-    
+
     st.session_state.session_summary_text = answer
 
 def run_easyocr(uploaded_file):
@@ -729,9 +748,11 @@ with header_cols[2]:
     st.metric("Session Time", timer)
 with header_cols[3]:
     if st.button("Emergency STOP", type="primary", use_container_width=True):
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         try:
             log_event(patient_id, "EMERGENCY_STOP", "Immediate Trigger - No Confirmation")
@@ -763,9 +784,12 @@ with col_pause:
 with col_stop:
     is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
     if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
+        # Accumulate final segment before resetting
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        st.session_state.session_summary_generated = False   # allow fresh summary
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         log_event(patient_id, "SESSION_STOP")
         st.rerun()
@@ -821,10 +845,11 @@ if st.session_state.connected:
         st.session_state.ml_pending       = False
         _ML_SHARED["result"].clear()
 
-    # 3. Detect session end and generate AI summary (once)
+    # 3. Detect session end and generate AI summary (once), then reset timer
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
         generate_session_summary()
         st.session_state.session_summary_generated = True
+        st.session_state.elapsed_time = 0.0   # reset only after summary has captured the duration
 
 # ==========================================
 # 10. INTERFACE – DOCTOR vs CAREGIVER
@@ -875,23 +900,39 @@ if user_role == "Doctor":
                 st.write(f"ESP32 State: {state}")
     
         st.markdown("---")
-        col_rag, col_ml = st.columns(2)
-        with col_rag:
+        col_left, col_ml = st.columns([1, 1.6])
+
+        with col_left:
+            # ── Safety & Optimization ──────────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("Safety & Optimization (Rules)")
+            st.subheader("🛡️ Safety & Rules")
             if st.session_state.system_status == "ACTIVE":
                 pain_val = st.session_state.get("live_pain", 0)
                 fatigue_val = st.session_state.get("live_fatigue", 0)
                 if pain_val >= 6:
-                    st.markdown("""<div class="alert-box alert-risk"><strong>High Pain Detected</strong><br>Observation: Pain Score > 6<br>Action: Reducing intensity by 20% (Rule PAIN-01)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-risk"><strong>High Pain Detected</strong><br>Pain Score > 6<br>Action: Reduce intensity 20% (PAIN-01)</div>""", unsafe_allow_html=True)
                 elif fatigue_val >= 7:
-                    st.markdown("""<div class="alert-box alert-info"><strong>High Fatigue</strong><br>Observation: Patient reported fatigue > 7<br>Action: Increasing OFF time (Rule ONOFF-04)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-info"><strong>High Fatigue</strong><br>Fatigue > 7<br>Action: Increase OFF time (ONOFF-04)</div>""", unsafe_allow_html=True)
                 else:
-                    st.markdown("""<div class="alert-box alert-safe"><strong>System Nominal</strong><br>All parameters within safety limits.<br>Action: Maintain current protocol (Rule MAIN-01)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-safe"><strong>System Nominal</strong><br>All parameters within safety limits.<br>Action: Maintain current protocol (MAIN-01)</div>""", unsafe_allow_html=True)
             else:
-                st.caption("System Inactive - Start session to monitor safety rules.")
+                st.caption("System inactive — start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
+            # ── Patient Feedback ───────────────────────────────────────────
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("💬 Patient Feedback")
+            pain    = st.slider("Pain Score (0–10)",    0, 10, value=st.session_state.get("live_pain",    2), key="live_pain")
+            fatigue = st.slider("Fatigue Level (0–10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
+            if pain > 7:
+                st.error("🚨 High pain – consider reducing intensity.")
+            elif pain > 4:
+                st.warning("⚠️ Moderate pain – monitor closely.")
+            else:
+                st.success("✅ Pain acceptable.")
+            if fatigue > 7:
+                st.info("💤 High fatigue – suggest longer rest periods.")
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col_ml:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
@@ -1078,21 +1119,6 @@ if user_role == "Doctor":
                 st.info("Start session to enable ML analysis.")
 
             st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown("### 💬 Patient Feedback")
-        col_feedback = st.columns(1)[0]
-        with col_feedback:
-            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
-            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
-            if pain > 7:
-                st.error("🚨 High pain – consider reducing intensity.")
-            elif pain > 4:
-                st.warning("⚠️ Moderate pain – monitor closely.")
-            else:
-                st.success("✅ Pain acceptable.")
-            if fatigue > 7:
-                st.info("💤 High fatigue – suggest longer rest periods.")
-
     # ---------- TAB 2: BODY COMPOSITION ----------
     with tab_body:
         st.markdown("## InBody Scan Analysis")
