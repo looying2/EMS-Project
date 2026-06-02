@@ -280,7 +280,7 @@ ss_init("ml_prediction", "WAITING")
 ss_init("ml_probability", 0.0)
 ss_init("live_pain", 2)
 ss_init("live_fatigue", 4)
-ss_init("esp_state", None)   # stores the latest state from ESP32
+ss_init("esp_state", None)
 ss_init("esp_mode", None)
 ss_init("esp_channel", None)
 ss_init("ml_summary", {})
@@ -291,9 +291,24 @@ ML_CALL_INTERVAL = 2  # seconds between ML API calls
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
-ss_init("ml_thread", None)       # background thread handle
-ss_init("ml_pending", False)     # True while a thread is running
-ss_init("last_ml_summary_snapshot", {})  # snapshot of ml_summary at session end
+ss_init("ml_thread", None)
+ss_init("ml_pending", False)
+ss_init("last_ml_summary_snapshot", {})
+
+# Frozen snapshots — captured at STOP before the main loop clears ML state
+ss_init("frozen_ml_prediction",    "WAITING")
+ss_init("frozen_ml_probability",   0.0)
+ss_init("frozen_ml_latest",        {})
+ss_init("frozen_ml_session",       {})
+ss_init("frozen_ml_probabilities", [])
+ss_init("frozen_ml_summary",       {})
+ss_init("frozen_intensity",        15)
+ss_init("frozen_frequency",        40)
+ss_init("frozen_pulse_width",      300)
+ss_init("frozen_duty_on",          10)
+ss_init("frozen_duty_off",         20)
+ss_init("frozen_pain",             2)
+ss_init("frozen_fatigue",          4)
 
 SESSION_DURATION_MINUTES = 20   # fixed protocol duration in minutes
 
@@ -343,20 +358,20 @@ def generate_session_summary():
     n_over    = (tele['emg'] > 700).sum()
     pct_act   = (n_mod + n_fat + n_over) / n_total * 100
 
-    # ── Session params ────────────────────────────────────────────────────
-    intensity   = st.session_state.intensity
-    frequency   = st.session_state.frequency
-    pulse_width = st.session_state.pulse_width
-    duty_on     = st.session_state.duty_on
-    duty_off    = st.session_state.duty_off
-    pain        = st.session_state.live_pain
-    fatigue     = st.session_state.live_fatigue
-    gait        = st.session_state.ml_prediction
-    ml_conf     = st.session_state.ml_probability
+    # ── Session params — read from frozen snapshot ────────────────────────
+    intensity   = st.session_state.frozen_intensity
+    frequency   = st.session_state.frozen_frequency
+    pulse_width = st.session_state.frozen_pulse_width
+    duty_on     = st.session_state.frozen_duty_on
+    duty_off    = st.session_state.frozen_duty_off
+    pain        = st.session_state.frozen_pain
+    fatigue     = st.session_state.frozen_fatigue
+    gait        = st.session_state.frozen_ml_prediction
+    ml_conf     = st.session_state.frozen_ml_probability
     conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
 
-    ml_session  = st.session_state.get("ml_session", {})
-    ml_latest   = st.session_state.get("ml_latest", {})
+    ml_session  = st.session_state.frozen_ml_session
+    ml_latest   = st.session_state.frozen_ml_latest
     rms_val     = ml_latest.get("rms_recto_femoral", "N/A")
     spread_val  = ml_latest.get("rms_signal_spread", "N/A")
     std_val     = ml_latest.get("rms_signal_std", "N/A")
@@ -364,10 +379,10 @@ def generate_session_summary():
     ml_min      = ml_session.get("min", "N/A")
     ml_max      = ml_session.get("max", "N/A")
     readings    = ml_session.get("count", "N/A")
-    ml_probs    = st.session_state.get("ml_probabilities", [])
+    ml_probs    = st.session_state.frozen_ml_probabilities
 
     # Snapshot ML summary for display
-    st.session_state.last_ml_summary_snapshot = dict(st.session_state.get("ml_summary", {}))
+    st.session_state.last_ml_summary_snapshot = dict(st.session_state.frozen_ml_summary)
 
     conditions = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
 
@@ -759,7 +774,26 @@ def generate_inbody_ai_insight(metrics):
     return overall_insights, risk_level
 
 # ==========================================
-# 5. DIALOGS
+# 5. SNAPSHOT HELPER
+# ==========================================
+def freeze_session_state():
+    """Capture all ML and session values before STOP clears them."""
+    st.session_state.frozen_ml_prediction    = st.session_state.ml_prediction
+    st.session_state.frozen_ml_probability   = st.session_state.ml_probability
+    st.session_state.frozen_ml_latest        = dict(st.session_state.get("ml_latest", {}))
+    st.session_state.frozen_ml_session       = dict(st.session_state.get("ml_session", {}))
+    st.session_state.frozen_ml_probabilities = list(st.session_state.get("ml_probabilities", []))
+    st.session_state.frozen_ml_summary       = dict(st.session_state.get("ml_summary", {}))
+    st.session_state.frozen_intensity        = st.session_state.intensity
+    st.session_state.frozen_frequency        = st.session_state.frequency
+    st.session_state.frozen_pulse_width      = st.session_state.pulse_width
+    st.session_state.frozen_duty_on          = st.session_state.duty_on
+    st.session_state.frozen_duty_off         = st.session_state.duty_off
+    st.session_state.frozen_pain             = st.session_state.live_pain
+    st.session_state.frozen_fatigue          = st.session_state.live_fatigue
+
+# ==========================================
+# 6. DIALOGS
 # ==========================================
 @st.dialog("Start Session Confirmation")
 def show_start_confirmation(pid, proto):
@@ -866,6 +900,7 @@ with header_cols[3]:
     if st.button("Emergency STOP", type="primary", use_container_width=True):
         if st.session_state.session_start_time:
             st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        freeze_session_state()   # snapshot ML + params before clearing
         st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
@@ -900,10 +935,10 @@ with col_pause:
 with col_stop:
     is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
     if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
-        # Accumulate final segment before resetting
         if st.session_state.session_start_time:
             st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
-        st.session_state.session_summary_generated = False   # allow fresh summary
+        freeze_session_state()   # snapshot ML + params before clearing
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
         st.session_state.session_start_time = None
