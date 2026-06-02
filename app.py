@@ -863,73 +863,145 @@ if user_role == "Doctor":
             prob = st.session_state.ml_probability
 
             if st.session_state.system_status == "ACTIVE":
-                # ===============================
-                # MAIN ML RESULT CARD
-                # ===============================
-                if res == "ABNORMAL" or res == "Abnormal":
-                    st.markdown(f"""
-                    <div class="alert-box alert-risk">
-                        <h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3>
-                        <p>Confidence: {prob:.1%}</p>
-                        <hr>
-                        <p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="alert-box alert-safe">
-                        <h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3>
-                        <p>Confidence: {prob:.1%}</p>
-                        <hr>
-                        <p><strong>Recommendation:</strong> Continue current protocol.</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # ===============================
-                # LATEST ML FEATURES
-                # ===============================
                 latest = st.session_state.get("ml_latest", {})
                 session = st.session_state.get("ml_session", {})
                 probabilities = st.session_state.get("ml_probabilities", [])
+                summary = st.session_state.get("ml_summary", {})
 
+                is_abnormal = res in ("ABNORMAL", "Abnormal")
+                pred_color = "#B71C1C" if is_abnormal else "#1B5E20"
+                pred_bg    = "#FFEBEE" if is_abnormal else "#E8F5E9"
+                pred_label = res if res else "—"
+                conf_pct   = prob * 100 if prob <= 1.0 else prob
+                conf_fill  = max(0.0, min(conf_pct, 100.0))
+
+                if conf_pct >= 75:
+                    conf_note = "High confidence. The model result is relatively stable for this reading."
+                elif conf_pct >= 50:
+                    conf_note = "Moderate confidence. Consider monitoring additional readings."
+                else:
+                    conf_note = "Low confidence. Result may be unreliable — check sensor placement."
+
+                # ── Predicted Class + Confidence ──────────────────────────
+                st.markdown(f"""
+                <div style="margin-bottom:16px;">
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+                        <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
+                                     font-size:0.8rem; padding:4px 12px; border-radius:20px;
+                                     letter-spacing:0.05em;">PREDICTED CLASS</span>
+                        <span style="font-size:1.25rem; font-weight:700; color:{pred_color};
+                                     background:{pred_bg}; padding:3px 14px; border-radius:16px;">
+                            {pred_label}
+                        </span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+                        <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
+                                     font-size:0.8rem; padding:4px 12px; border-radius:20px;
+                                     letter-spacing:0.05em;">CONFIDENCE</span>
+                        <span style="font-size:1.1rem; font-weight:700; color:#1E293B;">
+                            {conf_pct:.2f}%
+                        </span>
+                    </div>
+                    <div style="background:#E2E8F0; border-radius:8px; height:14px; width:100%; margin-bottom:4px;">
+                        <div style="background:#3949AB; width:{conf_fill}%; height:14px;
+                                    border-radius:8px; transition:width 0.4s ease;"></div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;
+                                font-size:0.72rem; color:#78909C; margin-bottom:4px;">
+                        <span>0%</span><span>50%</span><span>100%</span>
+                    </div>
+                    <p style="font-size:0.8rem; color:#546E7A; margin:0;">{conf_note}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ── Three feature metric cards ─────────────────────────────
                 if latest:
-                    st.markdown("#### Latest ML Features")
-                    f1, f2, f3 = st.columns(3)
-                    with f1:
-                        st.metric("Recto Femoris RMS", f"{latest.get('rms_recto_femoral', 0):.2f}")
-                    with f2:
-                        st.metric("Signal Spread", f"{latest.get('rms_signal_spread', 0):.2f}")
-                    with f3:
-                        st.metric("Signal STD", f"{latest.get('rms_signal_std', 0):.2f}")
+                    rms_val    = latest.get('rms_recto_femoral', 0)
+                    spread_val = latest.get('rms_signal_spread', 0)
+                    std_val    = latest.get('rms_signal_std', 0)
 
+                    st.markdown(f"""
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px;">
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                    border-radius:12px; padding:14px 10px;">
+                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                        letter-spacing:0.07em; margin-bottom:6px;">
+                                RECTO FEMORIS RMS
+                            </div>
+                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                        margin-bottom:6px;">{rms_val:.2f}</div>
+                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                Average EMG level from the recto femoris sensor in the latest cleaned 1-second window.
+                            </div>
+                        </div>
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                    border-radius:12px; padding:14px 10px;">
+                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                        letter-spacing:0.07em; margin-bottom:6px;">
+                                SIGNAL SPREAD
+                            </div>
+                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                        margin-bottom:6px;">{spread_val:.0f}</div>
+                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                Formula: max − min after cleaning. Shows the signal range within the 1-second window.
+                            </div>
+                        </div>
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                    border-radius:12px; padding:14px 10px;">
+                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                        letter-spacing:0.07em; margin-bottom:6px;">
+                                SIGNAL STD
+                            </div>
+                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                        margin-bottom:6px;">{std_val:.4f}</div>
+                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                Standard deviation of cleaned EMG samples. Shows how much the signal fluctuates around the average.
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # ── Probability bars ───────────────────────────────────────
                 if probabilities:
-                    st.markdown("#### Prediction Probability")
+                    st.markdown("**Prediction Probability**")
                     for p in probabilities:
-                        label = p.get("label", "Unknown")
-                        probability = float(p.get("probability", 0))
-                        st.progress(probability / 100, text=f"{label}: {probability:.2f}%")
+                        label_p = p.get("label", "Unknown")
+                        prob_p  = float(p.get("probability", 0))
+                        st.progress(prob_p / 100, text=f"{label_p}: {prob_p:.2f}%")
 
+                # ── Session Summary row ────────────────────────────────────
                 if session:
-                    st.markdown("#### Session Summary")
-                    st.write(f"Readings: {session.get('count', '-')} | Average: {session.get('avg', '-')} | Min: {session.get('min', '-')} | Max: {session.get('max', '-')}")
+                    st.markdown(f"""
+                    <div style="background:#F1F5F9; border:1px solid #E2E8F0; border-radius:10px;
+                                padding:12px 16px; margin:10px 0;">
+                        <div style="font-weight:700; font-size:0.9rem; color:#1E293B;
+                                    margin-bottom:4px;">Session Summary</div>
+                        <div style="font-size:0.85rem; color:#475569;">
+                            Readings: <strong>{session.get('count', '—')}</strong> &nbsp;|&nbsp;
+                            Average: <strong>{session.get('avg', '—')}</strong> &nbsp;|&nbsp;
+                            Min: <strong>{session.get('min', '—')}</strong> &nbsp;|&nbsp;
+                            Max: <strong>{session.get('max', '—')}</strong>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                # ===============================
-                # AI SUMMARY (from ML API)
-                # ===============================
-                if st.session_state.ml_summary:
+                # ── AI Summary expander ────────────────────────────────────
+                if summary:
                     with st.expander("📋 AI Summary & Recommendations"):
-                        summary = st.session_state.ml_summary
                         st.markdown(f"**{summary.get('title', '')}**")
                         st.markdown(summary.get('summary', ''))
                         if summary.get('interpretation'):
-                            st.markdown("**Interpretation:**")
+                            st.markdown("**Interpretation**")
                             for item in summary['interpretation']:
                                 st.markdown(f"- {item}")
                         if summary.get('actions'):
-                            st.markdown("**Recommended Actions:**")
+                            st.markdown("**Recommended Actions**")
                             for item in summary['actions']:
                                 st.markdown(f"- {item}")
-                        st.caption(summary.get('disclaimer', ''))
+                        disclaimer = summary.get('disclaimer', '')
+                        if disclaimer:
+                            st.caption(f"*Note: {disclaimer}*")
+
             else:
                 st.info("Start session to enable ML analysis.")
 
@@ -1616,4 +1688,3 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
 if st.session_state.system_status == "ACTIVE":
     time.sleep(0.2)
     st.rerun()
-
