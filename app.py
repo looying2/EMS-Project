@@ -294,10 +294,15 @@ ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
 
-# Shared dict for thread → main loop result handoff (thread-safe, avoids writing
-# to st.session_state from a background thread which Streamlit does not support)
-if "_ml_result_buf" not in st.session_state:
-    st.session_state._ml_result_buf = {}   # populated by worker, drained by main loop
+# Module-level buffer: lives for the entire Streamlit process (not per-session).
+# The background thread writes here; the main rerun loop reads and drains it.
+# Must be module-level — session_state objects are recreated each rerun so a
+# thread holding a reference to an old session_state dict would write to the
+# wrong object.
+import sys as _sys
+if not hasattr(_sys.modules[__name__], "_ML_RESULT_BUF"):
+    _ML_RESULT_BUF: dict = {}   # {"prediction": ..., "confidence": ..., etc.}
+    _ML_THREAD_REF: list = [None]   # [thread] — mutable container so worker can be tracked
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -779,38 +784,32 @@ if st.session_state.connected:
     if st.session_state.system_status == "ACTIVE":
 
         # Drain result buffer written by the last completed thread
-        buf = st.session_state._ml_result_buf
-        if buf:
-            st.session_state.ml_prediction    = buf.get("prediction",    "Unknown")
-            st.session_state.ml_probability   = buf.get("confidence",    0.0)
-            st.session_state.ml_summary       = buf.get("summary",       {})
-            st.session_state.ml_latest        = buf.get("latest",        {})
-            st.session_state.ml_probabilities = buf.get("probabilities",  [])
-            st.session_state.ml_session       = buf.get("session",       {})
+        if _ML_RESULT_BUF:
+            st.session_state.ml_prediction    = _ML_RESULT_BUF.get("prediction",    "Unknown")
+            st.session_state.ml_probability   = _ML_RESULT_BUF.get("confidence",    0.0)
+            st.session_state.ml_summary       = _ML_RESULT_BUF.get("summary",       {})
+            st.session_state.ml_latest        = _ML_RESULT_BUF.get("latest",        {})
+            st.session_state.ml_probabilities = _ML_RESULT_BUF.get("probabilities",  [])
+            st.session_state.ml_session       = _ML_RESULT_BUF.get("session",       {})
             st.session_state.ml_pending       = False
-            st.session_state._ml_result_buf   = {}   # clear after draining
+            _ML_RESULT_BUF.clear()
 
         # Start a new worker if previous one is done and interval has elapsed
         now_ts = time.time()
-        thread_dead = (
-            st.session_state.ml_thread is None
-            or not st.session_state.ml_thread.is_alive()
-        )
+        current_thread = _ML_THREAD_REF[0]
+        thread_dead = current_thread is None or not current_thread.is_alive()
         if thread_dead and (now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL):
-            result_buf = st.session_state._ml_result_buf   # reference to shared dict
-
-            def _ml_worker(buf=result_buf):
+            def _ml_worker():
                 prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-                # Write into the shared dict — safe because dict mutation is GIL-protected
-                buf["prediction"]    = prediction
-                buf["confidence"]    = confidence
-                buf["summary"]       = summary
-                buf["latest"]        = latest
-                buf["probabilities"] = probabilities
-                buf["session"]       = session
+                _ML_RESULT_BUF["prediction"]    = prediction
+                _ML_RESULT_BUF["confidence"]    = confidence
+                _ML_RESULT_BUF["summary"]       = summary
+                _ML_RESULT_BUF["latest"]        = latest
+                _ML_RESULT_BUF["probabilities"] = probabilities
+                _ML_RESULT_BUF["session"]       = session
 
             t = threading.Thread(target=_ml_worker, daemon=True)
-            st.session_state.ml_thread         = t
+            _ML_THREAD_REF[0]                  = t
             st.session_state.ml_pending        = True
             st.session_state.last_ml_call_time = now_ts
             t.start()
@@ -822,7 +821,7 @@ if st.session_state.connected:
         st.session_state.ml_probabilities = []
         st.session_state.ml_session       = {}
         st.session_state.ml_pending       = False
-        st.session_state._ml_result_buf   = {}
+        _ML_RESULT_BUF.clear()
 
     # 3. Detect session end and generate AI summary (once)
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
@@ -906,144 +905,154 @@ if user_role == "Doctor":
             prob = st.session_state.ml_probability
 
             if st.session_state.system_status == "ACTIVE":
-                latest = st.session_state.get("ml_latest", {})
-                session = st.session_state.get("ml_session", {})
-                probabilities = st.session_state.get("ml_probabilities", [])
-                summary = st.session_state.get("ml_summary", {})
-
-                is_abnormal = res in ("ABNORMAL", "Abnormal")
-                pred_color = "#B71C1C" if is_abnormal else "#1B5E20"
-                pred_bg    = "#FFEBEE" if is_abnormal else "#E8F5E9"
-                pred_label = res if res else "—"
-                conf_pct   = prob * 100 if prob <= 1.0 else prob
-                conf_fill  = max(0.0, min(conf_pct, 100.0))
-
-                if conf_pct >= 75:
-                    conf_note = "High confidence. The model result is relatively stable for this reading."
-                elif conf_pct >= 50:
-                    conf_note = "Moderate confidence. Consider monitoring additional readings."
+                # Show loading placeholder until first real result arrives
+                if res in ("WAITING", ""):
+                    st.markdown("""
+                    <div style="text-align:center; padding:40px 0; color:#94A3B8;">
+                        <div style="font-size:2rem; margin-bottom:8px;">⏳</div>
+                        <div style="font-size:1rem; font-weight:600;">Waiting for first prediction…</div>
+                        <div style="font-size:0.8rem; margin-top:6px;">The ML engine is reading the latest EMG data.</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    conf_note = "Low confidence. Result may be unreliable — check sensor placement."
+                    latest = st.session_state.get("ml_latest", {})
+                    session = st.session_state.get("ml_session", {})
+                    probabilities = st.session_state.get("ml_probabilities", [])
+                    summary = st.session_state.get("ml_summary", {})
 
-                # ── Predicted Class + Confidence ──────────────────────────
-                st.markdown(f"""
-                <div style="margin-bottom:16px;">
-                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
-                        <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
-                                     font-size:0.8rem; padding:4px 12px; border-radius:20px;
-                                     letter-spacing:0.05em;">PREDICTED CLASS</span>
-                        <span style="font-size:1.25rem; font-weight:700; color:{pred_color};
-                                     background:{pred_bg}; padding:3px 14px; border-radius:16px;">
-                            {pred_label}
-                        </span>
-                    </div>
-                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
-                        <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
-                                     font-size:0.8rem; padding:4px 12px; border-radius:20px;
-                                     letter-spacing:0.05em;">CONFIDENCE</span>
-                        <span style="font-size:1.1rem; font-weight:700; color:#1E293B;">
-                            {conf_pct:.2f}%
-                        </span>
-                    </div>
-                    <div style="background:#E2E8F0; border-radius:8px; height:14px; width:100%; margin-bottom:4px;">
-                        <div style="background:#3949AB; width:{conf_fill}%; height:14px;
-                                    border-radius:8px; transition:width 0.4s ease;"></div>
-                    </div>
-                    <div style="display:flex; justify-content:space-between;
-                                font-size:0.72rem; color:#78909C; margin-bottom:4px;">
-                        <span>0%</span><span>50%</span><span>100%</span>
-                    </div>
-                    <p style="font-size:0.8rem; color:#546E7A; margin:0;">{conf_note}</p>
-                </div>
-                """, unsafe_allow_html=True)
+                    is_abnormal = res in ("ABNORMAL", "Abnormal")
+                    pred_color = "#B71C1C" if is_abnormal else "#1B5E20"
+                    pred_bg    = "#FFEBEE" if is_abnormal else "#E8F5E9"
+                    pred_label = res if res else "—"
+                    conf_pct   = prob * 100 if prob <= 1.0 else prob
+                    conf_fill  = max(0.0, min(conf_pct, 100.0))
 
-                # ── Three feature metric cards ─────────────────────────────
-                if latest:
-                    rms_val    = latest.get('rms_recto_femoral', 0)
-                    spread_val = latest.get('rms_signal_spread', 0)
-                    std_val    = latest.get('rms_signal_std', 0)
+                    if conf_pct >= 75:
+                        conf_note = "High confidence. The model result is relatively stable for this reading."
+                    elif conf_pct >= 50:
+                        conf_note = "Moderate confidence. Consider monitoring additional readings."
+                    else:
+                        conf_note = "Low confidence. Result may be unreliable — check sensor placement."
 
+                    # ── Predicted Class + Confidence ──────────────────────────
                     st.markdown(f"""
-                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px;">
-                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                    border-radius:12px; padding:14px 10px;">
-                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                        letter-spacing:0.07em; margin-bottom:6px;">
-                                RECTO FEMORIS RMS
-                            </div>
-                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                        margin-bottom:6px;">{rms_val:.2f}</div>
-                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
-                                Average EMG level from the recto femoris sensor in the latest cleaned 1-second window.
-                            </div>
+                    <div style="margin-bottom:16px;">
+                        <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+                            <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
+                                         font-size:0.8rem; padding:4px 12px; border-radius:20px;
+                                         letter-spacing:0.05em;">PREDICTED CLASS</span>
+                            <span style="font-size:1.25rem; font-weight:700; color:{pred_color};
+                                         background:{pred_bg}; padding:3px 14px; border-radius:16px;">
+                                {pred_label}
+                            </span>
                         </div>
-                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                    border-radius:12px; padding:14px 10px;">
-                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                        letter-spacing:0.07em; margin-bottom:6px;">
-                                SIGNAL SPREAD
-                            </div>
-                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                        margin-bottom:6px;">{spread_val:.0f}</div>
-                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
-                                Formula: max − min after cleaning. Shows the signal range within the 1-second window.
-                            </div>
+                        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+                            <span style="background:#E8EAF6; color:#3949AB; font-weight:700;
+                                         font-size:0.8rem; padding:4px 12px; border-radius:20px;
+                                         letter-spacing:0.05em;">CONFIDENCE</span>
+                            <span style="font-size:1.1rem; font-weight:700; color:#1E293B;">
+                                {conf_pct:.2f}%
+                            </span>
                         </div>
-                        <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                    border-radius:12px; padding:14px 10px;">
-                            <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                        letter-spacing:0.07em; margin-bottom:6px;">
-                                SIGNAL STD
-                            </div>
-                            <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                        margin-bottom:6px;">{std_val:.4f}</div>
-                            <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
-                                Standard deviation of cleaned EMG samples. Shows how much the signal fluctuates around the average.
-                            </div>
+                        <div style="background:#E2E8F0; border-radius:8px; height:14px; width:100%; margin-bottom:4px;">
+                            <div style="background:#3949AB; width:{conf_fill}%; height:14px;
+                                        border-radius:8px; transition:width 0.4s ease;"></div>
                         </div>
+                        <div style="display:flex; justify-content:space-between;
+                                    font-size:0.72rem; color:#78909C; margin-bottom:4px;">
+                            <span>0%</span><span>50%</span><span>100%</span>
+                        </div>
+                        <p style="font-size:0.8rem; color:#546E7A; margin:0;">{conf_note}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
-                # ── Probability bars ───────────────────────────────────────
-                if probabilities:
-                    st.markdown("**Prediction Probability**")
-                    for p in probabilities:
-                        label_p = p.get("label", "Unknown")
-                        prob_p  = float(p.get("probability", 0))
-                        st.progress(prob_p / 100, text=f"{label_p}: {prob_p:.2f}%")
+                    # ── Three feature metric cards ─────────────────────────────
+                    if latest:
+                        rms_val    = latest.get('rms_recto_femoral', 0)
+                        spread_val = latest.get('rms_signal_spread', 0)
+                        std_val    = latest.get('rms_signal_std', 0)
 
-                # ── Session Summary row ────────────────────────────────────
-                if session:
-                    st.markdown(f"""
-                    <div style="background:#F1F5F9; border:1px solid #E2E8F0; border-radius:10px;
-                                padding:12px 16px; margin:10px 0;">
-                        <div style="font-weight:700; font-size:0.9rem; color:#1E293B;
-                                    margin-bottom:4px;">Session Summary</div>
-                        <div style="font-size:0.85rem; color:#475569;">
-                            Readings: <strong>{session.get('count', '—')}</strong> &nbsp;|&nbsp;
-                            Average: <strong>{session.get('avg', '—')}</strong> &nbsp;|&nbsp;
-                            Min: <strong>{session.get('min', '—')}</strong> &nbsp;|&nbsp;
-                            Max: <strong>{session.get('max', '—')}</strong>
+                        st.markdown(f"""
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                        border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                            letter-spacing:0.07em; margin-bottom:6px;">
+                                    RECTO FEMORIS RMS
+                                </div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                            margin-bottom:6px;">{rms_val:.2f}</div>
+                                <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                    Average EMG level from the recto femoris sensor in the latest cleaned 1-second window.
+                                </div>
+                            </div>
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                        border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                            letter-spacing:0.07em; margin-bottom:6px;">
+                                    SIGNAL SPREAD
+                                </div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                            margin-bottom:6px;">{spread_val:.0f}</div>
+                                <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                    Formula: max − min after cleaning. Shows the signal range within the 1-second window.
+                                </div>
+                            </div>
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
+                                        border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
+                                            letter-spacing:0.07em; margin-bottom:6px;">
+                                    SIGNAL STD
+                                </div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
+                                            margin-bottom:6px;">{std_val:.4f}</div>
+                                <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
+                                    Standard deviation of cleaned EMG samples. Shows how much the signal fluctuates around the average.
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
 
-                # ── AI Summary expander ────────────────────────────────────
-                if summary:
-                    with st.expander("📋 AI Summary & Recommendations"):
-                        st.markdown(f"**{summary.get('title', '')}**")
-                        st.markdown(summary.get('summary', ''))
-                        if summary.get('interpretation'):
-                            st.markdown("**Interpretation**")
-                            for item in summary['interpretation']:
-                                st.markdown(f"- {item}")
-                        if summary.get('actions'):
-                            st.markdown("**Recommended Actions**")
-                            for item in summary['actions']:
-                                st.markdown(f"- {item}")
-                        disclaimer = summary.get('disclaimer', '')
-                        if disclaimer:
-                            st.caption(f"*Note: {disclaimer}*")
+                    # ── Probability bars ───────────────────────────────────────
+                    if probabilities:
+                        st.markdown("**Prediction Probability**")
+                        for p in probabilities:
+                            label_p = p.get("label", "Unknown")
+                            prob_p  = float(p.get("probability", 0))
+                            st.progress(prob_p / 100, text=f"{label_p}: {prob_p:.2f}%")
+
+                    # ── Session Summary row ────────────────────────────────────
+                    if session:
+                        st.markdown(f"""
+                        <div style="background:#F1F5F9; border:1px solid #E2E8F0; border-radius:10px;
+                                    padding:12px 16px; margin:10px 0;">
+                            <div style="font-weight:700; font-size:0.9rem; color:#1E293B;
+                                        margin-bottom:4px;">Session Summary</div>
+                            <div style="font-size:0.85rem; color:#475569;">
+                                Readings: <strong>{session.get('count', '—')}</strong> &nbsp;|&nbsp;
+                                Average: <strong>{session.get('avg', '—')}</strong> &nbsp;|&nbsp;
+                                Min: <strong>{session.get('min', '—')}</strong> &nbsp;|&nbsp;
+                                Max: <strong>{session.get('max', '—')}</strong>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    # ── AI Summary expander ────────────────────────────────────
+                    if summary:
+                        with st.expander("📋 AI Summary & Recommendations"):
+                            st.markdown(f"**{summary.get('title', '')}**")
+                            st.markdown(summary.get('summary', ''))
+                            if summary.get('interpretation'):
+                                st.markdown("**Interpretation**")
+                                for item in summary['interpretation']:
+                                    st.markdown(f"- {item}")
+                            if summary.get('actions'):
+                                st.markdown("**Recommended Actions**")
+                                for item in summary['actions']:
+                                    st.markdown(f"- {item}")
+                            disclaimer = summary.get('disclaimer', '')
+                            if disclaimer:
+                                st.caption(f"*Note: {disclaimer}*")
 
             else:
                 st.info("Start session to enable ML analysis.")
