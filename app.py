@@ -294,15 +294,13 @@ ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
 
-# Module-level buffer: lives for the entire Streamlit process (not per-session).
-# The background thread writes here; the main rerun loop reads and drains it.
-# Must be module-level — session_state objects are recreated each rerun so a
-# thread holding a reference to an old session_state dict would write to the
-# wrong object.
-import sys as _sys
-if not hasattr(_sys.modules[__name__], "_ML_RESULT_BUF"):
-    _ML_RESULT_BUF: dict = {}   # {"prediction": ..., "confidence": ..., etc.}
-    _ML_THREAD_REF: list = [None]   # [thread] — mutable container so worker can be tracked
+# Process-level shared state for background ML thread ↔ main loop communication.
+# st.cache_resource survives all reruns and is guaranteed to return the same object.
+@st.cache_resource
+def _get_ml_buf():
+    return {"result": {}, "thread": [None]}   # result dict + thread ref list
+
+_ML_SHARED = _get_ml_buf()
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -784,32 +782,32 @@ if st.session_state.connected:
     if st.session_state.system_status == "ACTIVE":
 
         # Drain result buffer written by the last completed thread
-        if _ML_RESULT_BUF:
-            st.session_state.ml_prediction    = _ML_RESULT_BUF.get("prediction",    "Unknown")
-            st.session_state.ml_probability   = _ML_RESULT_BUF.get("confidence",    0.0)
-            st.session_state.ml_summary       = _ML_RESULT_BUF.get("summary",       {})
-            st.session_state.ml_latest        = _ML_RESULT_BUF.get("latest",        {})
-            st.session_state.ml_probabilities = _ML_RESULT_BUF.get("probabilities",  [])
-            st.session_state.ml_session       = _ML_RESULT_BUF.get("session",       {})
+        if _ML_SHARED["result"]:
+            st.session_state.ml_prediction    = _ML_SHARED["result"].get("prediction",    "Unknown")
+            st.session_state.ml_probability   = _ML_SHARED["result"].get("confidence",    0.0)
+            st.session_state.ml_summary       = _ML_SHARED["result"].get("summary",       {})
+            st.session_state.ml_latest        = _ML_SHARED["result"].get("latest",        {})
+            st.session_state.ml_probabilities = _ML_SHARED["result"].get("probabilities",  [])
+            st.session_state.ml_session       = _ML_SHARED["result"].get("session",       {})
             st.session_state.ml_pending       = False
-            _ML_RESULT_BUF.clear()
+            _ML_SHARED["result"].clear()
 
         # Start a new worker if previous one is done and interval has elapsed
         now_ts = time.time()
-        current_thread = _ML_THREAD_REF[0]
+        current_thread = _ML_SHARED["thread"][0]
         thread_dead = current_thread is None or not current_thread.is_alive()
         if thread_dead and (now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL):
             def _ml_worker():
                 prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-                _ML_RESULT_BUF["prediction"]    = prediction
-                _ML_RESULT_BUF["confidence"]    = confidence
-                _ML_RESULT_BUF["summary"]       = summary
-                _ML_RESULT_BUF["latest"]        = latest
-                _ML_RESULT_BUF["probabilities"] = probabilities
-                _ML_RESULT_BUF["session"]       = session
+                _ML_SHARED["result"]["prediction"]    = prediction
+                _ML_SHARED["result"]["confidence"]    = confidence
+                _ML_SHARED["result"]["summary"]       = summary
+                _ML_SHARED["result"]["latest"]        = latest
+                _ML_SHARED["result"]["probabilities"] = probabilities
+                _ML_SHARED["result"]["session"]       = session
 
             t = threading.Thread(target=_ml_worker, daemon=True)
-            _ML_THREAD_REF[0]                  = t
+            _ML_SHARED["thread"][0]            = t
             st.session_state.ml_pending        = True
             st.session_state.last_ml_call_time = now_ts
             t.start()
@@ -821,7 +819,7 @@ if st.session_state.connected:
         st.session_state.ml_probabilities = []
         st.session_state.ml_session       = {}
         st.session_state.ml_pending       = False
-        _ML_RESULT_BUF.clear()
+        _ML_SHARED["result"].clear()
 
     # 3. Detect session end and generate AI summary (once)
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
