@@ -317,47 +317,43 @@ reader = load_easyocr()
 def generate_session_summary():
     tele = st.session_state.telemetry
     if tele.empty:
-        st.session_state.session_summary_text = "No telemetry data collected during this session."
+        st.session_state.session_summary_text = {"error": "No telemetry data collected during this session."}
         return
 
-    # ── Telemetry derived stats ───────────────────────────────────────────
+    # ── Derived stats ─────────────────────────────────────────────────────
     avg_emg   = tele['emg'].mean()
     max_emg   = tele['emg'].max()
     min_emg   = tele['emg'].min()
     std_emg   = tele['emg'].std()
-    # EMG trend: compare first-quarter average vs last-quarter average
-    q          = max(1, len(tele) // 4)
-    emg_early  = tele['emg'].iloc[:q].mean()
-    emg_late   = tele['emg'].iloc[-q:].mean()
-    emg_trend  = emg_late - emg_early
+    q         = max(1, len(tele) // 4)
+    emg_early = tele['emg'].iloc[:q].mean()
+    emg_late  = tele['emg'].iloc[-q:].mean()
+    emg_trend = emg_late - emg_early
     trend_desc = (
-        f"increased by {emg_trend:.1f} µV over the session (possible progressive recruitment)"
+        f"increased by {emg_trend:.1f} µV (progressive recruitment)"
         if emg_trend > 10 else
-        f"decreased by {abs(emg_trend):.1f} µV over the session (possible fatigue or accommodation)"
+        f"decreased by {abs(emg_trend):.1f} µV (possible fatigue or accommodation)"
         if emg_trend < -10 else
-        f"remained relatively stable (Δ{emg_trend:+.1f} µV)"
+        f"remained stable (Δ{emg_trend:+.1f} µV)"
     )
-    # Muscle state breakdown
-    n_total     = len(tele)
-    n_relaxed   = (tele['emg'] <= 300).sum()
-    n_moderate  = ((tele['emg'] > 300) & (tele['emg'] <= 500)).sum()
-    n_fatigue   = ((tele['emg'] > 500) & (tele['emg'] <= 700)).sum()
-    n_overex    = (tele['emg'] > 700).sum()
-    pct_active  = (n_moderate + n_fatigue + n_overex) / n_total * 100
+    n_total   = len(tele)
+    n_relaxed = (tele['emg'] <= 300).sum()
+    n_mod     = ((tele['emg'] > 300) & (tele['emg'] <= 500)).sum()
+    n_fat     = ((tele['emg'] > 500) & (tele['emg'] <= 700)).sum()
+    n_over    = (tele['emg'] > 700).sum()
+    pct_act   = (n_mod + n_fat + n_over) / n_total * 100
 
-    # ── Stimulation parameters ────────────────────────────────────────────
+    # ── Session params ────────────────────────────────────────────────────
     intensity   = st.session_state.intensity
     frequency   = st.session_state.frequency
     pulse_width = st.session_state.pulse_width
     duty_on     = st.session_state.duty_on
     duty_off    = st.session_state.duty_off
-
-    # ── Patient & ML data ─────────────────────────────────────────────────
     pain        = st.session_state.live_pain
     fatigue     = st.session_state.live_fatigue
     gait        = st.session_state.ml_prediction
     ml_conf     = st.session_state.ml_probability
-    ml_conf_pct = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
+    conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
 
     ml_session  = st.session_state.get("ml_session", {})
     ml_latest   = st.session_state.get("ml_latest", {})
@@ -368,107 +364,123 @@ def generate_session_summary():
     ml_min      = ml_session.get("min", "N/A")
     ml_max      = ml_session.get("max", "N/A")
     readings    = ml_session.get("count", "N/A")
+    ml_probs    = st.session_state.get("ml_probabilities", [])
 
-    # Snapshot ML summary for display in Records tab
+    # Snapshot ML summary for display
     st.session_state.last_ml_summary_snapshot = dict(st.session_state.get("ml_summary", {}))
 
-    # ── Pain/fatigue interpretation ───────────────────────────────────────
-    pain_level   = "high" if pain >= 7 else "moderate" if pain >= 4 else "low/acceptable"
-    fatigue_level = "high" if fatigue >= 7 else "moderate" if fatigue >= 5 else "low/acceptable"
+    conditions = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
 
-    # ── Condition-specific context ────────────────────────────────────────
-    conditions   = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
-    has_sarcop   = "Sarcopenia" in condition_tags
-    has_stroke   = "Post-Stroke" in condition_tags
-    has_oa       = "Osteoarthritis" in condition_tags
+    # ── Build fallback (factual base the model must preserve) ─────────────
+    fallback = {
+        "title": f"{gait} recto femoris EMG pattern — {SESSION_DURATION_MINUTES}-min EMS session ({conditions})",
+        "summary": (
+            f"A {SESSION_DURATION_MINUTES}-minute EMS session was completed for patient {patient_id} "
+            f"(age group {age_group}, {conditions}) using {intensity} mA at {frequency} Hz, "
+            f"{pulse_width} µs pulse width, {duty_on}s ON / {duty_off}s OFF duty cycle. "
+            f"The recto femoris EMG averaged {avg_emg:.1f} µV (max {max_emg:.1f}, min {min_emg:.1f}, "
+            f"STD {std_emg:.1f} µV) across {n_total} samples, with signal amplitude that {trend_desc}. "
+            f"Active muscle recruitment occurred in {pct_act:.0f}% of the session "
+            f"({n_mod} moderate, {n_fat} fatigue-range, {n_over} overexertion samples). "
+            f"The ML gait classifier returned {gait} at {conf_pct:.1f}% confidence, "
+            f"with final patient-reported pain of {pain}/10 and fatigue of {fatigue}/10."
+        ),
+        "interpretation": [
+            f"Recto Femoris RMS = {rms_val} µV (session avg/min/max: {ml_avg}/{ml_min}/{ml_max}): "
+            f"this average signal level reflects the muscle's response to {intensity} mA stimulation "
+            f"and should be compared to baseline for a {age_group}-year-old patient with {conditions}.",
+            f"Signal Spread = {spread_val} and STD = {std_val}: the within-window variability indicates "
+            f"{'stable, consistent motor unit firing' if float(str(std_val).replace('N/A','0') or 0) < 5 else 'notable signal fluctuation, suggesting irregular motor unit recruitment or movement artefact'}. "
+            f"EMG STD across the full session was {std_emg:.1f} µV.",
+            f"Gait classification: {gait} at {conf_pct:.1f}% confidence with "
+            f"{n_relaxed} relaxed / {n_mod} moderate / {n_fat} fatigue-range / {n_over} overexertion samples — "
+            f"active recruitment was {pct_act:.0f}% of session time, "
+            f"and the EMG trend {trend_desc}."
+        ],
+        "actions": [
+            f"{'Maintain' if gait == 'Normal' else 'Review'} the current stimulation parameters "
+            f"({intensity} mA, {frequency} Hz, {pulse_width} µs) for the next session "
+            f"{'as the Normal classification supports protocol continuity' if gait == 'Normal' else 'as the Abnormal classification warrants reassessment of electrode placement and intensity'}.",
+            f"{'Increase' if pct_act < 50 else 'Maintain'} stimulation intensity "
+            f"{'above' if pct_act < 50 else 'at'} {intensity} mA: active recruitment was {pct_act:.0f}% of session "
+            f"({'below' if pct_act < 50 else 'within'} the target >50% threshold for effective EMS rehabilitation).",
+            f"{'Reduce duty cycle ON-time or allow additional rest between sets' if fatigue >= 6 else 'Maintain the current duty cycle'} "
+            f"(currently {duty_on}s ON / {duty_off}s OFF): patient reported fatigue {fatigue}/10 "
+            f"({'high — rest-to-work ratio should be reviewed' if fatigue >= 6 else 'acceptable'}).",
+            f"{'Address pain management — consider reducing intensity or adjusting electrode position' if pain >= 5 else 'Continue monitoring pain score at each session'}: "
+            f"patient reported pain {pain}/10 "
+            f"({'exceeds comfort threshold of 5/10' if pain >= 5 else 'within acceptable range'})."
+        ]
+    }
 
-    condition_context = ""
-    if has_sarcop:
-        condition_context += (
-            f"The patient has sarcopenia — recto femoris RMS of {rms_val} µV should be "
-            f"interpreted against expected low baseline for age group {age_group}. "
-            f"EMG active time ({pct_active:.0f}% of session) reflects muscle recruitment capacity. "
-        )
-    if has_stroke:
-        condition_context += (
-            f"Post-stroke context: gait classification of {gait} ({ml_conf_pct:.1f}% confidence) "
-            f"is clinically significant. Signal spread of {spread_val} may reflect motor unit "
-            f"synchronisation changes typical in post-stroke rehabilitation. "
-        )
-    if has_oa:
-        condition_context += (
-            f"Osteoarthritis context: pain score of {pain}/10 during EMS at {intensity} mA "
-            f"should be monitored closely. If pain remains above 4/10, consider reducing intensity. "
-        )
+    # ── Probability and feature lines for the prompt ───────────────────────
+    probability_lines = [
+        f"- {p.get('label', '?')}: {float(p.get('probability', 0)):.1f}%"
+        for p in ml_probs
+    ]
+    feature_lines = [
+        f"- Recto Femoris RMS: {rms_val} µV",
+        f"- Signal Spread: {spread_val}",
+        f"- Signal STD: {std_val}",
+        f"- Session EMG avg: {avg_emg:.1f} µV, max: {max_emg:.1f} µV, min: {min_emg:.1f} µV",
+        f"- Active recruitment: {pct_act:.0f}% of session",
+        f"- Stimulation: {intensity} mA / {frequency} Hz / {pulse_width} µs / {duty_on}s ON {duty_off}s OFF",
+        f"- Pain: {pain}/10, Fatigue: {fatigue}/10",
+    ]
 
-    prompt = f"""You are a senior clinical physiotherapist writing a formal post-session EMS report.
-Write a structured, specific clinical summary. Every sentence must reference actual numbers from the data below.
-Do NOT write generic rehabilitation advice. Do NOT use citation numbers like [1].
-
-═══ PATIENT PROFILE ═══
-Patient ID   : {patient_id}
-Age group    : {age_group}
-Conditions   : {conditions}
-Protocol     : {protocol}
-
-═══ STIMULATION PARAMETERS ═══
-Intensity    : {intensity} mA
-Frequency    : {frequency} Hz
-Pulse width  : {pulse_width} µs
-Duty cycle   : {duty_on}s ON / {duty_off}s OFF
-Duration     : {SESSION_DURATION_MINUTES} minutes
-
-═══ EMG TELEMETRY ═══
-Average      : {avg_emg:.1f} µV   |   Max: {max_emg:.1f} µV   |   Min: {min_emg:.1f} µV
-Std deviation: {std_emg:.1f} µV
-EMG trend    : {trend_desc}
-Muscle state breakdown ({n_total} samples):
-  - Relaxed (≤300 µV)      : {n_relaxed} samples ({n_relaxed/n_total*100:.0f}%)
-  - Moderate (301–500 µV)  : {n_moderate} samples ({n_moderate/n_total*100:.0f}%)
-  - Fatigue (501–700 µV)   : {n_fatigue} samples ({n_fatigue/n_total*100:.0f}%)
-  - Overexertion (>700 µV) : {n_overex} samples ({n_overex/n_total*100:.0f}%)
-Active recruitment time    : {pct_active:.0f}% of session
-
-═══ ML GAIT ANALYSIS ═══
-Classification  : {gait} ({ml_conf_pct:.1f}% confidence)
-RF RMS          : {rms_val} µV
-Signal spread   : {spread_val}
-Signal STD      : {std_val}
-Session avg/min/max RMS: {ml_avg} / {ml_min} / {ml_max}
-Total ML readings: {readings}
-
-═══ PATIENT-REPORTED OUTCOMES ═══
-Pain score    : {pain}/10 ({pain_level})
-Fatigue score : {fatigue}/10 ({fatigue_level})
-
-═══ CONDITION-SPECIFIC CONTEXT ═══
-{condition_context if condition_context else 'No specific condition flags.'}
-
-Write the summary in exactly these 4 sections — each grounded in the numbers above:
-
-**1. Session Overview**
-One sentence: duration, stimulation parameters used, and total EMG samples collected.
-
-**2. Muscle Activity Analysis**
-Two sentences: describe the EMG trend ({trend_desc}), the breakdown of muscle states (relaxed/moderate/fatigue/overexertion percentages), and what the recto femoris RMS of {rms_val} µV indicates for this patient's condition ({conditions}).
-
-**3. Patient Response & Comfort**
-One sentence: relate the pain score ({pain}/10) and fatigue score ({fatigue}/10) to the EMG findings — did high fatigue correlate with increased EMG variability (STD {std_emg:.1f} µV)?
-
-**4. Clinical Recommendations for Next Session**
-Two to three specific, actionable recommendations based on:
-- Gait result: {gait} at {ml_conf_pct:.1f}% confidence
-- If pain > 4: suggest intensity adjustment from current {intensity} mA
-- If fatigue > 6: suggest duty cycle adjustment (currently {duty_on}s ON / {duty_off}s OFF)
-- If gait is Abnormal: suggest electrode repositioning or frequency change from {frequency} Hz
-- If active recruitment < 50%: suggest intensity increase to improve recruitment
-Each recommendation must cite the specific metric that justifies it."""
+    prompt = f"""You are a rehabilitation engineering assistant explaining an EMG monitoring result.
+Use the draft explanation below as the factual base. Improve wording only if needed, but do not remove the actual values or make the response generic.
+Draft explanation:
+Title: {fallback["title"]}
+Summary: {fallback["summary"]}
+Interpretation:
+- {fallback["interpretation"][0]}
+- {fallback["interpretation"][1]}
+- {fallback["interpretation"][2]}
+Actions:
+- {fallback["actions"][0]}
+- {fallback["actions"][1]}
+- {fallback["actions"][2]}
+- {fallback["actions"][3]}
+Model result:
+Prediction: {gait}
+Confidence: {conf_pct:.1f}%
+Class probabilities:
+{chr(10).join(probability_lines) if probability_lines else "Not available"}
+Input measurements:
+{chr(10).join(feature_lines) if feature_lines else "Not available"}
+Rules:
+- Do not diagnose.
+- Do not claim certainty.
+- Do not use the words "diagnosis", "diagnostic", or "disease" except in the disclaimer.
+- The title must describe the EMG signal pattern.
+- The summary must be 4 to 6 complete sentences.
+- The interpretation list must contain exactly 3 points.
+- The actions list must contain exactly 4 practical actions.
+- Each interpretation point must mention the actual measurement value.
+- Do not use vague advice such as "monitor closely" unless you explain what to monitor.
+- Return only valid JSON.
+- Do not use markdown.
+JSON format:
+{{
+  "title": "specific EMG signal pattern title",
+  "summary": "4 to 6 sentences explaining this specific result",
+  "interpretation": ["value-specific point 1", "value-specific point 2", "value-specific point 3"],
+  "actions": ["specific action 1", "specific action 2", "specific action 3", "specific action 4"]
+}}"""
 
     answer, _ = call_rag_api(prompt)
-    if not answer or "Error" in answer:
-        answer = "Could not generate AI summary. The RAG service may be offline."
 
-    st.session_state.session_summary_text = answer
+    # Parse JSON response — fall back to the pre-computed fallback if the model fails
+    parsed = None
+    if answer and "Error" not in answer:
+        try:
+            clean = answer.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except Exception:
+            parsed = None
+
+    st.session_state.session_summary_text = parsed if parsed else fallback
 
 def run_easyocr(uploaded_file):
     image = Image.open(uploaded_file)
@@ -1410,7 +1422,8 @@ if user_role == "Doctor":
         
     # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
-        if st.session_state.session_summary_text:
+        sess_summary = st.session_state.session_summary_text
+        if sess_summary:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("📝 AI Session Summary")
 
@@ -1423,79 +1436,107 @@ if user_role == "Doctor":
             is_abn    = gait_res in ("ABNORMAL", "Abnormal")
 
             stat_cols = st.columns(5)
-            stat_cols[0].metric("⏱️ Duration",   f"{SESSION_DURATION_MINUTES} min")
-            stat_cols[1].metric("📈 Avg EMG",    f"{tele_snap['emg'].mean():.1f} µV" if not tele_snap.empty else "—")
-            stat_cols[2].metric("🦶 Gait Result", gait_res)
-            stat_cols[3].metric("😣 Pain",        f"{st.session_state.live_pain}/10")
-            stat_cols[4].metric("😴 Fatigue",     f"{st.session_state.live_fatigue}/10")
+            stat_cols[0].metric("⏱️ Duration",    f"{SESSION_DURATION_MINUTES} min")
+            stat_cols[1].metric("📈 Avg EMG",     f"{tele_snap['emg'].mean():.1f} µV" if not tele_snap.empty else "—")
+            stat_cols[2].metric("🦶 Gait Result",  gait_res)
+            stat_cols[3].metric("😣 Pain",         f"{st.session_state.live_pain}/10")
+            stat_cols[4].metric("😴 Fatigue",      f"{st.session_state.live_fatigue}/10")
 
             st.divider()
 
-            # ── Clinical session summary (from RAG) ───────────────────────
+            # ── Clinical session summary (structured JSON from RAG) ────────
             st.markdown("#### 🏥 Clinical Session Summary")
-            st.markdown(st.session_state.session_summary_text)
+
+            if isinstance(sess_summary, dict) and "error" not in sess_summary:
+                # Title
+                if sess_summary.get("title"):
+                    st.markdown(f"**{sess_summary['title']}**")
+
+                # Summary paragraph
+                if sess_summary.get("summary"):
+                    st.markdown(
+                        f"<p style='font-size:0.88rem; color:#475569; line-height:1.7; margin:10px 0 14px;'>"
+                        f"{sess_summary['summary']}</p>",
+                        unsafe_allow_html=True
+                    )
+
+                # Interpretation + Actions side by side
+                col_interp, col_actions = st.columns(2)
+                with col_interp:
+                    if sess_summary.get("interpretation"):
+                        st.markdown("**Signal Interpretation**")
+                        for item in sess_summary["interpretation"]:
+                            st.markdown(f"- {item}")
+                with col_actions:
+                    if sess_summary.get("actions"):
+                        st.markdown("**Recommended Actions**")
+                        for item in sess_summary["actions"]:
+                            st.markdown(f"- {item}")
+
+            elif isinstance(sess_summary, dict) and "error" in sess_summary:
+                st.warning(sess_summary["error"])
+            else:
+                # Legacy plain text fallback
+                st.markdown(sess_summary)
 
             # ── ML Signal Analysis (from ML API summary) ──────────────────
             if ml_snap:
                 st.divider()
                 st.markdown("#### 🤖 ML Signal Analysis")
 
-                # Gait result badge
                 badge_color = "#C62828" if is_abn else "#2E7D32"
                 badge_bg    = "#FFEBEE" if is_abn else "#E8F5E9"
                 conf_pct    = st.session_state.ml_probability
                 conf_pct    = conf_pct * 100 if conf_pct <= 1.0 else conf_pct
                 st.markdown(f"""
-                <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px;">
                     <div style="background:{badge_bg}; border:1px solid {badge_color};
                                 border-radius:10px; padding:8px 18px;">
                         <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
                                      letter-spacing:0.06em;">PREDICTED CLASS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800;
-                                     color:{badge_color};">{gait_res}</span>
+                        <span style="font-size:1.2rem; font-weight:800; color:{badge_color};">{gait_res}</span>
                     </div>
                     <div style="background:#F1F5F9; border:1px solid #E2E8F0;
                                 border-radius:10px; padding:8px 18px;">
                         <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
                                      letter-spacing:0.06em;">CONFIDENCE</span><br>
-                        <span style="font-size:1.2rem; font-weight:800;
-                                     color:#1E293B;">{conf_pct:.1f}%</span>
+                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{conf_pct:.1f}%</span>
                     </div>
                     <div style="background:#F1F5F9; border:1px solid #E2E8F0;
                                 border-radius:10px; padding:8px 18px;">
                         <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
                                      letter-spacing:0.06em;">RF RMS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800;
-                                     color:#1E293B;">{ml_lat.get('rms_recto_femoral', '—')}</span>
+                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{ml_lat.get('rms_recto_femoral', '—')}</span>
                     </div>
                     <div style="background:#F1F5F9; border:1px solid #E2E8F0;
                                 border-radius:10px; padding:8px 18px;">
                         <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
                                      letter-spacing:0.06em;">READINGS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800;
-                                     color:#1E293B;">{ml_sess.get('count', '—')}</span>
+                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{ml_sess.get('count', '—')}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                if ml_snap.get('title'):
-                    st.markdown(f"**{ml_snap.get('title', '')}**")
-                if ml_snap.get('summary'):
-                    st.markdown(f"<p style='font-size:0.88rem; color:#475569; line-height:1.7'>{ml_snap.get('summary','')}</p>", unsafe_allow_html=True)
-
-                col_interp, col_actions = st.columns(2)
-                with col_interp:
-                    if ml_snap.get('interpretation'):
+                if ml_snap.get("title"):
+                    st.markdown(f"**{ml_snap['title']}**")
+                if ml_snap.get("summary"):
+                    st.markdown(
+                        f"<p style='font-size:0.88rem; color:#475569; line-height:1.7'>"
+                        f"{ml_snap['summary']}</p>",
+                        unsafe_allow_html=True
+                    )
+                col_i2, col_a2 = st.columns(2)
+                with col_i2:
+                    if ml_snap.get("interpretation"):
                         st.markdown("**Signal Interpretation**")
-                        for item in ml_snap['interpretation']:
+                        for item in ml_snap["interpretation"]:
                             st.markdown(f"- {item}")
-                with col_actions:
-                    if ml_snap.get('actions'):
+                with col_a2:
+                    if ml_snap.get("actions"):
                         st.markdown("**Recommended Actions**")
-                        for item in ml_snap['actions']:
+                        for item in ml_snap["actions"]:
                             st.markdown(f"- {item}")
-
-                disclaimer = ml_snap.get('disclaimer', '')
+                disclaimer = ml_snap.get("disclaimer", "")
                 if disclaimer:
                     st.caption(f"*⚠️ Note: {disclaimer}*")
 
