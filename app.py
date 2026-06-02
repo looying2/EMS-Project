@@ -220,7 +220,7 @@ def call_ml_api():
         response = requests.post(
             ML_API_URL,
             json={},
-            timeout=20,
+            timeout=10,
             verify=False
         )
 
@@ -905,6 +905,10 @@ if user_role == "Doctor":
             prob = st.session_state.ml_probability
 
             if st.session_state.system_status == "ACTIVE":
+
+                ERROR_PREFIXES = ("API Timeout", "API Offline", "API Error", "Invalid API Response")
+                is_error = any(res.startswith(p) for p in ERROR_PREFIXES) if isinstance(res, str) else False
+
                 # Show loading placeholder until first real result arrives
                 if res in ("WAITING", ""):
                     st.markdown("""
@@ -914,6 +918,24 @@ if user_role == "Doctor":
                         <div style="font-size:0.8rem; margin-top:6px;">The ML engine is reading the latest EMG data.</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                elif is_error:
+                    icon = "⏱️" if "Timeout" in res else "📡" if "Offline" in res else "⚠️"
+                    tip  = "The ngrok tunnel may be down or the Flask backend is not running." if "Offline" in res else \
+                           "The backend took too long to respond. It will retry automatically." if "Timeout" in res else \
+                           "Check the backend logs for details."
+                    st.markdown(f"""
+                    <div style="background:#FFF8E1; border:1px solid #FFD54F; border-radius:12px;
+                                padding:20px; text-align:center; color:#7B4F00;">
+                        <div style="font-size:2rem; margin-bottom:6px;">{icon}</div>
+                        <div style="font-size:1rem; font-weight:700; margin-bottom:4px;">{res}</div>
+                        <div style="font-size:0.8rem; color:#8D6E63;">{tip}</div>
+                        <div style="font-size:0.75rem; margin-top:10px; color:#BDBDBD;">
+                            Retrying every {ML_CALL_INTERVAL}s…
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
                 else:
                     latest = st.session_state.get("ml_latest", {})
                     session = st.session_state.get("ml_session", {})
