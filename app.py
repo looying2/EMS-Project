@@ -366,12 +366,15 @@ def generate_session_summary():
     duty_off    = st.session_state.frozen_duty_off
     pain        = st.session_state.frozen_pain
     fatigue     = st.session_state.frozen_fatigue
-    gait        = st.session_state.frozen_ml_prediction
-    ml_conf     = st.session_state.frozen_ml_probability
-    conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
+    # ML values: read from live state (preserved on STOPPED) with frozen as fallback
+    gait        = st.session_state.ml_prediction    if st.session_state.ml_prediction    not in ("WAITING", "")  else st.session_state.frozen_ml_prediction
+    ml_conf     = st.session_state.ml_probability   if st.session_state.ml_probability   > 0                     else st.session_state.frozen_ml_probability
+    ml_session  = st.session_state.ml_session       if st.session_state.ml_session                               else st.session_state.frozen_ml_session
+    ml_latest   = st.session_state.ml_latest        if st.session_state.ml_latest                                else st.session_state.frozen_ml_latest
+    ml_probs    = st.session_state.ml_probabilities if st.session_state.ml_probabilities                         else st.session_state.frozen_ml_probabilities
+    ml_summary_snap = st.session_state.ml_summary   if st.session_state.ml_summary                              else st.session_state.frozen_ml_summary
 
-    ml_session  = st.session_state.frozen_ml_session
-    ml_latest   = st.session_state.frozen_ml_latest
+    conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
     rms_val     = ml_latest.get("rms_recto_femoral", "N/A")
     spread_val  = ml_latest.get("rms_signal_spread", "N/A")
     std_val     = ml_latest.get("rms_signal_std", "N/A")
@@ -379,20 +382,29 @@ def generate_session_summary():
     ml_min      = ml_session.get("min", "N/A")
     ml_max      = ml_session.get("max", "N/A")
     readings    = ml_session.get("count", "N/A")
-    ml_probs    = st.session_state.frozen_ml_probabilities
 
-    # Snapshot ML summary for display
-    st.session_state.last_ml_summary_snapshot = dict(st.session_state.frozen_ml_summary)
+    # Snapshot ML summary for display in Records tab
+    st.session_state.last_ml_summary_snapshot = dict(ml_summary_snap)
 
     conditions = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
+
+    # Use protocol intensity label — if frozen intensity is 0 it means the device
+    # controlled current independently (ESP32 mode); use a neutral description
+    intensity_desc = f"{intensity} mA" if intensity > 0 else "device-controlled current (intensity set by ESP32)"
+    intensity_action = (
+        f"set by the ESP32 controller — verify the actual delivered current level from the device log"
+        if intensity == 0 else
+        f"{intensity} mA"
+    )
 
     # ── Build fallback (factual base the model must preserve) ─────────────
     fallback = {
         "title": f"{gait} recto femoris EMG pattern — {SESSION_DURATION_MINUTES}-min EMS session ({conditions})",
         "summary": (
             f"A {SESSION_DURATION_MINUTES}-minute EMS session was completed for patient {patient_id} "
-            f"(age group {age_group}, {conditions}) using {intensity} mA at {frequency} Hz, "
-            f"{pulse_width} µs pulse width, {duty_on}s ON / {duty_off}s OFF duty cycle. "
+            f"(age group {age_group}, {conditions}) at {frequency} Hz, "
+            f"{pulse_width} µs pulse width, {duty_on}s ON / {duty_off}s OFF duty cycle"
+            f"{f', {intensity} mA stimulation intensity' if intensity > 0 else ''}. "
             f"The recto femoris EMG averaged {avg_emg:.1f} µV (max {max_emg:.1f}, min {min_emg:.1f}, "
             f"STD {std_emg:.1f} µV) across {n_total} samples, with signal amplitude that {trend_desc}. "
             f"Active muscle recruitment occurred in {pct_act:.0f}% of the session "
@@ -402,7 +414,7 @@ def generate_session_summary():
         ),
         "interpretation": [
             f"Recto Femoris RMS = {rms_val} µV (session avg/min/max: {ml_avg}/{ml_min}/{ml_max}): "
-            f"this average signal level reflects the muscle's response to {intensity} mA stimulation "
+            f"this average signal level reflects the muscle's response to {intensity_desc} "
             f"and should be compared to baseline for a {age_group}-year-old patient with {conditions}.",
             f"Signal Spread = {spread_val} and STD = {std_val}: the within-window variability indicates "
             f"{'stable, consistent motor unit firing' if float(str(std_val).replace('N/A','0') or 0) < 5 else 'notable signal fluctuation, suggesting irregular motor unit recruitment or movement artefact'}. "
@@ -413,16 +425,16 @@ def generate_session_summary():
             f"and the EMG trend {trend_desc}."
         ],
         "actions": [
-            f"{'Maintain' if gait == 'Normal' else 'Review'} the current stimulation parameters "
-            f"({intensity} mA, {frequency} Hz, {pulse_width} µs) for the next session "
-            f"{'as the Normal classification supports protocol continuity' if gait == 'Normal' else 'as the Abnormal classification warrants reassessment of electrode placement and intensity'}.",
-            f"{'Increase' if pct_act < 50 else 'Maintain'} stimulation intensity "
-            f"{'above' if pct_act < 50 else 'at'} {intensity} mA: active recruitment was {pct_act:.0f}% of session "
-            f"({'below' if pct_act < 50 else 'within'} the target >50% threshold for effective EMS rehabilitation).",
-            f"{'Reduce duty cycle ON-time or allow additional rest between sets' if fatigue >= 6 else 'Maintain the current duty cycle'} "
+            f"{'Maintain' if gait == 'Normal' else 'Review'} the stimulation protocol "
+            f"({frequency} Hz, {pulse_width} µs, {intensity_action}) for the next session — "
+            f"{'Normal gait classification supports protocol continuity' if gait == 'Normal' else 'Abnormal gait classification warrants reassessment of electrode placement and stimulation parameters'}.",
+            f"{'Increase stimulation intensity to improve recruitment' if pct_act < 50 else 'Active recruitment was sufficient'} "
+            f"({pct_act:.0f}% of session {'is below' if pct_act < 50 else 'meets'} the >50% target for effective EMS rehabilitation"
+            f"{f'; consider increasing above {intensity} mA' if pct_act < 50 and intensity > 0 else ''}).",
+            f"{'Reduce duty cycle ON-time or allow longer rest between sets' if fatigue >= 6 else 'Maintain the current duty cycle'} "
             f"(currently {duty_on}s ON / {duty_off}s OFF): patient reported fatigue {fatigue}/10 "
             f"({'high — rest-to-work ratio should be reviewed' if fatigue >= 6 else 'acceptable'}).",
-            f"{'Address pain management — consider reducing intensity or adjusting electrode position' if pain >= 5 else 'Continue monitoring pain score at each session'}: "
+            f"{'Address pain management — consider adjusting electrode position or reducing stimulation intensity' if pain >= 5 else 'Continue documenting pain score each session'}: "
             f"patient reported pain {pain}/10 "
             f"({'exceeds comfort threshold of 5/10' if pain >= 5 else 'within acceptable range'})."
         ]
@@ -804,6 +816,7 @@ def show_start_confirmation(pid, proto):
     if col_d1.button("Yes (Start)", type="primary"):
         if st.session_state.system_status != "PAUSED":
             st.session_state.elapsed_time = 0.0
+            st.session_state.intensity = 15   # reset to default on fresh start
         st.session_state.system_status = "ACTIVE"
         st.session_state.session_start_time = time.time()
         try:
@@ -987,14 +1000,17 @@ if st.session_state.connected:
             st.session_state.last_ml_call_time = now_ts
             t.start()
     else:
-        st.session_state.ml_prediction    = "WAITING"
-        st.session_state.ml_probability   = 0.0
-        st.session_state.ml_summary       = {}
-        st.session_state.ml_latest        = {}
-        st.session_state.ml_probabilities = []
-        st.session_state.ml_session       = {}
-        st.session_state.ml_pending       = False
-        _ML_SHARED["result"].clear()
+        # Only wipe ML display state when truly idle/paused — not on STOPPED,
+        # because generate_session_summary() still needs the last-known values.
+        if st.session_state.system_status != "STOPPED":
+            st.session_state.ml_prediction    = "WAITING"
+            st.session_state.ml_probability   = 0.0
+            st.session_state.ml_summary       = {}
+            st.session_state.ml_latest        = {}
+            st.session_state.ml_probabilities = []
+            st.session_state.ml_session       = {}
+            st.session_state.ml_pending       = False
+            _ML_SHARED["result"].clear()
 
     # 3. Detect session end and generate AI summary (once), then reset timer
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
