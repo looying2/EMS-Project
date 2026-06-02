@@ -852,115 +852,87 @@ if user_role == "Doctor":
             else:
                 st.caption("System Inactive - Start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
+        
+        
         with col_ml:
-    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.subheader("Gait Pathology (ML Engine)")
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("Gait Pathology (ML Engine)")
 
-    res = st.session_state.ml_prediction
-    prob = st.session_state.ml_probability
+            res = st.session_state.ml_prediction
+            prob = st.session_state.ml_probability
 
-    if st.session_state.system_status == "ACTIVE":
+            if st.session_state.system_status == "ACTIVE":
+                # ===============================
+                # MAIN ML RESULT CARD
+                # ===============================
+                if res == "ABNORMAL" or res == "Abnormal":
+                    st.markdown(f"""
+                    <div class="alert-box alert-risk">
+                        <h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3>
+                        <p>Confidence: {prob:.1%}</p>
+                        <hr>
+                        <p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="alert-box alert-safe">
+                        <h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3>
+                        <p>Confidence: {prob:.1%}</p>
+                        <hr>
+                        <p><strong>Recommendation:</strong> Continue current protocol.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-        # ===============================
-        # MAIN ML RESULT CARD
-        # ===============================
-        if res == "ABNORMAL" or res == "Abnormal":
-            st.markdown(f"""
-            <div class="alert-box alert-risk">
-                <h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3>
-                <p>Confidence: {prob:.1%}</p>
-                <hr>
-                <p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="alert-box alert-safe">
-                <h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3>
-                <p>Confidence: {prob:.1%}</p>
-                <hr>
-                <p><strong>Recommendation:</strong> Continue current protocol.</p>
-            </div>
-            """, unsafe_allow_html=True)
+                # ===============================
+                # LATEST ML FEATURES
+                # ===============================
+                latest = st.session_state.get("ml_latest", {})
+                session = st.session_state.get("ml_session", {})
+                probabilities = st.session_state.get("ml_probabilities", [])
 
-        # ===============================
-        # ADD THIS PART HERE
-        # ===============================
-        latest = st.session_state.get("ml_latest", {})
-        session = st.session_state.get("ml_session", {})
-        probabilities = st.session_state.get("ml_probabilities", [])
+                if latest:
+                    st.markdown("#### Latest ML Features")
+                    f1, f2, f3 = st.columns(3)
+                    with f1:
+                        st.metric("Recto Femoris RMS", f"{latest.get('rms_recto_femoral', 0):.2f}")
+                    with f2:
+                        st.metric("Signal Spread", f"{latest.get('rms_signal_spread', 0):.2f}")
+                    with f3:
+                        st.metric("Signal STD", f"{latest.get('rms_signal_std', 0):.2f}")
 
-        if latest:
-            st.markdown("#### Latest ML Features")
+                if probabilities:
+                    st.markdown("#### Prediction Probability")
+                    for p in probabilities:
+                        label = p.get("label", "Unknown")
+                        probability = float(p.get("probability", 0))
+                        st.progress(probability / 100, text=f"{label}: {probability:.2f}%")
 
-            f1, f2, f3 = st.columns(3)
+                if session:
+                    st.markdown("#### Session Summary")
+                    st.write(f"Readings: {session.get('count', '-')} | Average: {session.get('avg', '-')} | Min: {session.get('min', '-')} | Max: {session.get('max', '-')}")
 
-            with f1:
-                st.metric(
-                    "Recto Femoris RMS",
-                    f"{latest.get('rms_recto_femoral', 0):.2f}"
-                )
+                # ===============================
+                # AI SUMMARY (from ML API)
+                # ===============================
+                if st.session_state.ml_summary:
+                    with st.expander("📋 AI Summary & Recommendations"):
+                        summary = st.session_state.ml_summary
+                        st.markdown(f"**{summary.get('title', '')}**")
+                        st.markdown(summary.get('summary', ''))
+                        if summary.get('interpretation'):
+                            st.markdown("**Interpretation:**")
+                            for item in summary['interpretation']:
+                                st.markdown(f"- {item}")
+                        if summary.get('actions'):
+                            st.markdown("**Recommended Actions:**")
+                            for item in summary['actions']:
+                                st.markdown(f"- {item}")
+                        st.caption(summary.get('disclaimer', ''))
+            else:
+                st.info("Start session to enable ML analysis.")
 
-            with f2:
-                st.metric(
-                    "Signal Spread",
-                    f"{latest.get('rms_signal_spread', 0):.2f}"
-                )
-
-            with f3:
-                st.metric(
-                    "Signal STD",
-                    f"{latest.get('rms_signal_std', 0):.2f}"
-                )
-
-        if probabilities:
-            st.markdown("#### Prediction Probability")
-
-            for p in probabilities:
-                label = p.get("label", "Unknown")
-                probability = float(p.get("probability", 0))
-
-                st.progress(
-                    probability / 100,
-                    text=f"{label}: {probability:.2f}%"
-                )
-
-        if session:
-            st.markdown("#### Session Summary")
-
-            st.write(
-                f"Readings: {session.get('count', '-')}"
-                f" | Average: {session.get('avg', '-')}"
-                f" | Min: {session.get('min', '-')}"
-                f" | Max: {session.get('max', '-')}"
-            )
-
-        # ===============================
-        # EXISTING AI SUMMARY
-        # ===============================
-        if st.session_state.ml_summary:
-            with st.expander("📋 AI Summary & Recommendations"):
-                summary = st.session_state.ml_summary
-                st.markdown(f"**{summary.get('title', '')}**")
-                st.markdown(summary.get('summary', ''))
-
-                if summary.get('interpretation'):
-                    st.markdown("**Interpretation:**")
-                    for item in summary['interpretation']:
-                        st.markdown(f"- {item}")
-
-                if summary.get('actions'):
-                    st.markdown("**Recommended Actions:**")
-                    for item in summary['actions']:
-                        st.markdown(f"- {item}")
-
-                st.caption(summary.get('disclaimer', ''))
-
-    else:
-        st.info("Start session to enable ML analysis.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
+            st.markdown('</div>', unsafe_allow_html=True)
         st.markdown("---")
         st.markdown("### 💬 Patient Feedback")
         col_feedback = st.columns(1)[0]
