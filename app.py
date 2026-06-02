@@ -1480,9 +1480,6 @@ if user_role == "Doctor":
 
             # ── Session stats header row ──────────────────────────────────
             tele_snap = st.session_state.telemetry
-            ml_snap   = st.session_state.last_ml_summary_snapshot
-            ml_sess   = st.session_state.get("ml_session", {})
-            ml_lat    = st.session_state.get("ml_latest", {})
             gait_res  = st.session_state.ml_prediction
             is_abn    = gait_res in ("ABNORMAL", "Abnormal")
 
@@ -1529,67 +1526,6 @@ if user_role == "Doctor":
             else:
                 # Legacy plain text fallback
                 st.markdown(sess_summary)
-
-            # ── ML Signal Analysis (from ML API summary) ──────────────────
-            if ml_snap:
-                st.divider()
-                st.markdown("#### 🤖 ML Signal Analysis")
-
-                badge_color = "#C62828" if is_abn else "#2E7D32"
-                badge_bg    = "#FFEBEE" if is_abn else "#E8F5E9"
-                conf_pct    = st.session_state.ml_probability
-                conf_pct    = conf_pct * 100 if conf_pct <= 1.0 else conf_pct
-                st.markdown(f"""
-                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px;">
-                    <div style="background:{badge_bg}; border:1px solid {badge_color};
-                                border-radius:10px; padding:8px 18px;">
-                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
-                                     letter-spacing:0.06em;">PREDICTED CLASS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800; color:{badge_color};">{gait_res}</span>
-                    </div>
-                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
-                                border-radius:10px; padding:8px 18px;">
-                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
-                                     letter-spacing:0.06em;">CONFIDENCE</span><br>
-                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{conf_pct:.1f}%</span>
-                    </div>
-                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
-                                border-radius:10px; padding:8px 18px;">
-                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
-                                     letter-spacing:0.06em;">RF RMS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{ml_lat.get('rms_recto_femoral', '—')}</span>
-                    </div>
-                    <div style="background:#F1F5F9; border:1px solid #E2E8F0;
-                                border-radius:10px; padding:8px 18px;">
-                        <span style="font-size:0.72rem; color:#546E7A; font-weight:700;
-                                     letter-spacing:0.06em;">READINGS</span><br>
-                        <span style="font-size:1.2rem; font-weight:800; color:#1E293B;">{ml_sess.get('count', '—')}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if ml_snap.get("title"):
-                    st.markdown(f"**{ml_snap['title']}**")
-                if ml_snap.get("summary"):
-                    st.markdown(
-                        f"<p style='font-size:0.88rem; color:#475569; line-height:1.7'>"
-                        f"{ml_snap['summary']}</p>",
-                        unsafe_allow_html=True
-                    )
-                col_i2, col_a2 = st.columns(2)
-                with col_i2:
-                    if ml_snap.get("interpretation"):
-                        st.markdown("**Signal Interpretation**")
-                        for item in ml_snap["interpretation"]:
-                            st.markdown(f"- {item}")
-                with col_a2:
-                    if ml_snap.get("actions"):
-                        st.markdown("**Recommended Actions**")
-                        for item in ml_snap["actions"]:
-                            st.markdown(f"- {item}")
-                disclaimer = ml_snap.get("disclaimer", "")
-                if disclaimer:
-                    st.caption(f"*⚠️ Note: {disclaimer}*")
 
             st.divider()
             if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
