@@ -766,21 +766,22 @@ if st.session_state.connected:
     update_telemetry_stream()
     print("Latest EMG:", st.session_state.telemetry['emg'].iloc[-1] if not st.session_state.telemetry.empty else "No data")
 
-    # 2. If session is active, run ML prediction on recent EMG values
+    # 2. If session is active, call the remote ML API (no arguments – it reads Firebase itself)
     if st.session_state.system_status == "ACTIVE":
-        emg_values = st.session_state.telemetry['emg'].tail(50).values
-        if len(emg_values) > 0:
-            rms = np.sqrt(np.mean(emg_values**2))
-            spread = np.max(emg_values) - np.min(emg_values)
-            std = np.std(emg_values)
-            prediction, confidence, summary = call_ml_api(rms, spread, std)
-            st.session_state.ml_prediction = prediction
-            st.session_state.ml_probability = confidence 
-            st.session_state.ml_summary = summary
-        else:
-            st.session_state.ml_prediction = "WAITING"
-            st.session_state.ml_probability = 0.0
-            st.session_state.ml_summary = {}
+        prediction, confidence, summary, latest, probabilities, session = call_ml_api()
+        st.session_state.ml_prediction = prediction
+        st.session_state.ml_probability = confidence
+        st.session_state.ml_summary = summary
+        st.session_state.ml_latest = latest
+        st.session_state.ml_probabilities = probabilities
+        st.session_state.ml_session = session
+    else:
+        st.session_state.ml_prediction = "WAITING"
+        st.session_state.ml_probability = 0.0
+        st.session_state.ml_summary = {}
+        st.session_state.ml_latest = {}
+        st.session_state.ml_probabilities = []
+        st.session_state.ml_session = {}
 
     # 3. Detect session end and generate AI summary (once)
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
