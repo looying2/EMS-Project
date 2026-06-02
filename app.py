@@ -7,6 +7,7 @@ import sqlite3
 import joblib
 import json
 import os
+import threading
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from collections import deque
@@ -290,6 +291,8 @@ ML_CALL_INTERVAL = 5  # seconds between ML API calls
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
+ss_init("ml_thread", None)       # background thread handle
+ss_init("ml_pending", False)     # True while a thread is running
 
 # ==========================================
 # 4. HELPER FUNCTIONS
@@ -767,25 +770,37 @@ if st.session_state.connected:
     update_telemetry_stream()
     print("Latest EMG:", st.session_state.telemetry['emg'].iloc[-1] if not st.session_state.telemetry.empty else "No data")
 
-    # 2. If session is active, call the remote ML API only every ML_CALL_INTERVAL seconds
+    # 2. Fire ML API call in a background thread (non-blocking)
     if st.session_state.system_status == "ACTIVE":
         now_ts = time.time()
-        if now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL:
-            prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-            st.session_state.ml_prediction = prediction
-            st.session_state.ml_probability = confidence
-            st.session_state.ml_summary = summary
-            st.session_state.ml_latest = latest
-            st.session_state.ml_probabilities = probabilities
-            st.session_state.ml_session = session
+        thread_dead = (
+            st.session_state.ml_thread is None
+            or not st.session_state.ml_thread.is_alive()
+        )
+        if thread_dead and (now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL):
+            def _ml_worker():
+                prediction, confidence, summary, latest, probabilities, session = call_ml_api()
+                st.session_state.ml_prediction   = prediction
+                st.session_state.ml_probability  = confidence
+                st.session_state.ml_summary      = summary
+                st.session_state.ml_latest       = latest
+                st.session_state.ml_probabilities = probabilities
+                st.session_state.ml_session      = session
+                st.session_state.ml_pending      = False
+
+            t = threading.Thread(target=_ml_worker, daemon=True)
+            st.session_state.ml_thread       = t
+            st.session_state.ml_pending      = True
             st.session_state.last_ml_call_time = now_ts
+            t.start()
     else:
-        st.session_state.ml_prediction = "WAITING"
-        st.session_state.ml_probability = 0.0
-        st.session_state.ml_summary = {}
-        st.session_state.ml_latest = {}
+        st.session_state.ml_prediction    = "WAITING"
+        st.session_state.ml_probability   = 0.0
+        st.session_state.ml_summary       = {}
+        st.session_state.ml_latest        = {}
         st.session_state.ml_probabilities = []
-        st.session_state.ml_session = {}
+        st.session_state.ml_session       = {}
+        st.session_state.ml_pending       = False
 
     # 3. Detect session end and generate AI summary (once)
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
@@ -862,6 +877,8 @@ if user_role == "Doctor":
         with col_ml:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("Gait Pathology (ML Engine)")
+            if st.session_state.get("ml_pending", False):
+                st.caption("🔄 Fetching latest prediction…")
 
             res = st.session_state.ml_prediction
             prob = st.session_state.ml_probability
