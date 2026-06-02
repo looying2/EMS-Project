@@ -320,49 +320,149 @@ def generate_session_summary():
         st.session_state.session_summary_text = "No telemetry data collected during this session."
         return
 
-    # Compute session stats
-    avg_emg  = tele['emg'].mean()
-    max_emg  = tele['emg'].max()
-    min_emg  = tele['emg'].min()
-    pain     = st.session_state.live_pain
-    fatigue  = st.session_state.live_fatigue
-    gait     = st.session_state.ml_prediction
+    # ── Telemetry derived stats ───────────────────────────────────────────
+    avg_emg   = tele['emg'].mean()
+    max_emg   = tele['emg'].max()
+    min_emg   = tele['emg'].min()
+    std_emg   = tele['emg'].std()
+    # EMG trend: compare first-quarter average vs last-quarter average
+    q          = max(1, len(tele) // 4)
+    emg_early  = tele['emg'].iloc[:q].mean()
+    emg_late   = tele['emg'].iloc[-q:].mean()
+    emg_trend  = emg_late - emg_early
+    trend_desc = (
+        f"increased by {emg_trend:.1f} µV over the session (possible progressive recruitment)"
+        if emg_trend > 10 else
+        f"decreased by {abs(emg_trend):.1f} µV over the session (possible fatigue or accommodation)"
+        if emg_trend < -10 else
+        f"remained relatively stable (Δ{emg_trend:+.1f} µV)"
+    )
+    # Muscle state breakdown
+    n_total     = len(tele)
+    n_relaxed   = (tele['emg'] <= 300).sum()
+    n_moderate  = ((tele['emg'] > 300) & (tele['emg'] <= 500)).sum()
+    n_fatigue   = ((tele['emg'] > 500) & (tele['emg'] <= 700)).sum()
+    n_overex    = (tele['emg'] > 700).sum()
+    pct_active  = (n_moderate + n_fatigue + n_overex) / n_total * 100
 
-    # Snapshot the latest ML summary for display in Records tab
+    # ── Stimulation parameters ────────────────────────────────────────────
+    intensity   = st.session_state.intensity
+    frequency   = st.session_state.frequency
+    pulse_width = st.session_state.pulse_width
+    duty_on     = st.session_state.duty_on
+    duty_off    = st.session_state.duty_off
+
+    # ── Patient & ML data ─────────────────────────────────────────────────
+    pain        = st.session_state.live_pain
+    fatigue     = st.session_state.live_fatigue
+    gait        = st.session_state.ml_prediction
+    ml_conf     = st.session_state.ml_probability
+    ml_conf_pct = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
+
+    ml_session  = st.session_state.get("ml_session", {})
+    ml_latest   = st.session_state.get("ml_latest", {})
+    rms_val     = ml_latest.get("rms_recto_femoral", "N/A")
+    spread_val  = ml_latest.get("rms_signal_spread", "N/A")
+    std_val     = ml_latest.get("rms_signal_std", "N/A")
+    ml_avg      = ml_session.get("avg", "N/A")
+    ml_min      = ml_session.get("min", "N/A")
+    ml_max      = ml_session.get("max", "N/A")
+    readings    = ml_session.get("count", "N/A")
+
+    # Snapshot ML summary for display in Records tab
     st.session_state.last_ml_summary_snapshot = dict(st.session_state.get("ml_summary", {}))
 
-    # ML session stats if available
-    ml_session = st.session_state.get("ml_session", {})
-    ml_latest  = st.session_state.get("ml_latest", {})
-    rms_val    = ml_latest.get("rms_recto_femoral", "N/A")
-    spread_val = ml_latest.get("rms_signal_spread", "N/A")
-    std_val    = ml_latest.get("rms_signal_std", "N/A")
-    readings   = ml_session.get("count", "N/A")
+    # ── Pain/fatigue interpretation ───────────────────────────────────────
+    pain_level   = "high" if pain >= 7 else "moderate" if pain >= 4 else "low/acceptable"
+    fatigue_level = "high" if fatigue >= 7 else "moderate" if fatigue >= 5 else "low/acceptable"
 
-    prompt = f"""You are a clinical physiotherapy assistant writing a structured EMS session report.
+    # ── Condition-specific context ────────────────────────────────────────
+    conditions   = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
+    has_sarcop   = "Sarcopenia" in condition_tags
+    has_stroke   = "Post-Stroke" in condition_tags
+    has_oa       = "Osteoarthritis" in condition_tags
 
-PATIENT: {patient_id} | Age group: {age_group} | Conditions: {', '.join(condition_tags) if condition_tags else 'None recorded'}
-PROTOCOL: {protocol}
+    condition_context = ""
+    if has_sarcop:
+        condition_context += (
+            f"The patient has sarcopenia — recto femoris RMS of {rms_val} µV should be "
+            f"interpreted against expected low baseline for age group {age_group}. "
+            f"EMG active time ({pct_active:.0f}% of session) reflects muscle recruitment capacity. "
+        )
+    if has_stroke:
+        condition_context += (
+            f"Post-stroke context: gait classification of {gait} ({ml_conf_pct:.1f}% confidence) "
+            f"is clinically significant. Signal spread of {spread_val} may reflect motor unit "
+            f"synchronisation changes typical in post-stroke rehabilitation. "
+        )
+    if has_oa:
+        condition_context += (
+            f"Osteoarthritis context: pain score of {pain}/10 during EMS at {intensity} mA "
+            f"should be monitored closely. If pain remains above 4/10, consider reducing intensity. "
+        )
 
-SESSION DATA (do NOT alter these numbers):
-- Session duration: {SESSION_DURATION_MINUTES} minutes exactly
-- EMG readings collected: {readings} samples
-- EMG average: {avg_emg:.1f} µV | max: {max_emg:.1f} µV | min: {min_emg:.1f} µV
-- Recto femoris RMS (last window): {rms_val} µV
-- Signal spread (last window): {spread_val}
-- Signal STD (last window): {std_val}
-- Gait classification result: {gait}
-- Final pain score: {pain}/10
-- Final fatigue score: {fatigue}/10
+    prompt = f"""You are a senior clinical physiotherapist writing a formal post-session EMS report.
+Write a structured, specific clinical summary. Every sentence must reference actual numbers from the data below.
+Do NOT write generic rehabilitation advice. Do NOT use citation numbers like [1].
 
-Write a concise clinical session summary (3–4 sentences) covering:
-1. Session duration and protocol applied (use exactly {SESSION_DURATION_MINUTES} minutes)
-2. EMG activity observed and what it indicates for this patient's condition
-3. Patient-reported comfort (pain/fatigue) and how it relates to the EMG findings
-4. Specific next-session recommendations based on gait result ({gait}) and conditions ({', '.join(condition_tags) if condition_tags else 'general rehabilitation'})
+═══ PATIENT PROFILE ═══
+Patient ID   : {patient_id}
+Age group    : {age_group}
+Conditions   : {conditions}
+Protocol     : {protocol}
 
-Do NOT use generic advice. Base every recommendation on the actual data above.
-Do NOT use citation numbers like [1]. Write in plain clinical prose."""
+═══ STIMULATION PARAMETERS ═══
+Intensity    : {intensity} mA
+Frequency    : {frequency} Hz
+Pulse width  : {pulse_width} µs
+Duty cycle   : {duty_on}s ON / {duty_off}s OFF
+Duration     : {SESSION_DURATION_MINUTES} minutes
+
+═══ EMG TELEMETRY ═══
+Average      : {avg_emg:.1f} µV   |   Max: {max_emg:.1f} µV   |   Min: {min_emg:.1f} µV
+Std deviation: {std_emg:.1f} µV
+EMG trend    : {trend_desc}
+Muscle state breakdown ({n_total} samples):
+  - Relaxed (≤300 µV)      : {n_relaxed} samples ({n_relaxed/n_total*100:.0f}%)
+  - Moderate (301–500 µV)  : {n_moderate} samples ({n_moderate/n_total*100:.0f}%)
+  - Fatigue (501–700 µV)   : {n_fatigue} samples ({n_fatigue/n_total*100:.0f}%)
+  - Overexertion (>700 µV) : {n_overex} samples ({n_overex/n_total*100:.0f}%)
+Active recruitment time    : {pct_active:.0f}% of session
+
+═══ ML GAIT ANALYSIS ═══
+Classification  : {gait} ({ml_conf_pct:.1f}% confidence)
+RF RMS          : {rms_val} µV
+Signal spread   : {spread_val}
+Signal STD      : {std_val}
+Session avg/min/max RMS: {ml_avg} / {ml_min} / {ml_max}
+Total ML readings: {readings}
+
+═══ PATIENT-REPORTED OUTCOMES ═══
+Pain score    : {pain}/10 ({pain_level})
+Fatigue score : {fatigue}/10 ({fatigue_level})
+
+═══ CONDITION-SPECIFIC CONTEXT ═══
+{condition_context if condition_context else 'No specific condition flags.'}
+
+Write the summary in exactly these 4 sections — each grounded in the numbers above:
+
+**1. Session Overview**
+One sentence: duration, stimulation parameters used, and total EMG samples collected.
+
+**2. Muscle Activity Analysis**
+Two sentences: describe the EMG trend ({trend_desc}), the breakdown of muscle states (relaxed/moderate/fatigue/overexertion percentages), and what the recto femoris RMS of {rms_val} µV indicates for this patient's condition ({conditions}).
+
+**3. Patient Response & Comfort**
+One sentence: relate the pain score ({pain}/10) and fatigue score ({fatigue}/10) to the EMG findings — did high fatigue correlate with increased EMG variability (STD {std_emg:.1f} µV)?
+
+**4. Clinical Recommendations for Next Session**
+Two to three specific, actionable recommendations based on:
+- Gait result: {gait} at {ml_conf_pct:.1f}% confidence
+- If pain > 4: suggest intensity adjustment from current {intensity} mA
+- If fatigue > 6: suggest duty cycle adjustment (currently {duty_on}s ON / {duty_off}s OFF)
+- If gait is Abnormal: suggest electrode repositioning or frequency change from {frequency} Hz
+- If active recruitment < 50%: suggest intensity increase to improve recruitment
+Each recommendation must cite the specific metric that justifies it."""
 
     answer, _ = call_rag_api(prompt)
     if not answer or "Error" in answer:
