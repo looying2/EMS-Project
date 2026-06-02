@@ -294,6 +294,11 @@ ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
 
+# Shared dict for thread → main loop result handoff (thread-safe, avoids writing
+# to st.session_state from a background thread which Streamlit does not support)
+if "_ml_result_buf" not in st.session_state:
+    st.session_state._ml_result_buf = {}   # populated by worker, drained by main loop
+
 # ==========================================
 # 4. HELPER FUNCTIONS
 # ==========================================
@@ -772,25 +777,41 @@ if st.session_state.connected:
 
     # 2. Fire ML API call in a background thread (non-blocking)
     if st.session_state.system_status == "ACTIVE":
+
+        # Drain result buffer written by the last completed thread
+        buf = st.session_state._ml_result_buf
+        if buf:
+            st.session_state.ml_prediction    = buf.get("prediction",    "Unknown")
+            st.session_state.ml_probability   = buf.get("confidence",    0.0)
+            st.session_state.ml_summary       = buf.get("summary",       {})
+            st.session_state.ml_latest        = buf.get("latest",        {})
+            st.session_state.ml_probabilities = buf.get("probabilities",  [])
+            st.session_state.ml_session       = buf.get("session",       {})
+            st.session_state.ml_pending       = False
+            st.session_state._ml_result_buf   = {}   # clear after draining
+
+        # Start a new worker if previous one is done and interval has elapsed
         now_ts = time.time()
         thread_dead = (
             st.session_state.ml_thread is None
             or not st.session_state.ml_thread.is_alive()
         )
         if thread_dead and (now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL):
-            def _ml_worker():
+            result_buf = st.session_state._ml_result_buf   # reference to shared dict
+
+            def _ml_worker(buf=result_buf):
                 prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-                st.session_state.ml_prediction   = prediction
-                st.session_state.ml_probability  = confidence
-                st.session_state.ml_summary      = summary
-                st.session_state.ml_latest       = latest
-                st.session_state.ml_probabilities = probabilities
-                st.session_state.ml_session      = session
-                st.session_state.ml_pending      = False
+                # Write into the shared dict — safe because dict mutation is GIL-protected
+                buf["prediction"]    = prediction
+                buf["confidence"]    = confidence
+                buf["summary"]       = summary
+                buf["latest"]        = latest
+                buf["probabilities"] = probabilities
+                buf["session"]       = session
 
             t = threading.Thread(target=_ml_worker, daemon=True)
-            st.session_state.ml_thread       = t
-            st.session_state.ml_pending      = True
+            st.session_state.ml_thread         = t
+            st.session_state.ml_pending        = True
             st.session_state.last_ml_call_time = now_ts
             t.start()
     else:
@@ -801,6 +822,7 @@ if st.session_state.connected:
         st.session_state.ml_probabilities = []
         st.session_state.ml_session       = {}
         st.session_state.ml_pending       = False
+        st.session_state._ml_result_buf   = {}
 
     # 3. Detect session end and generate AI summary (once)
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
