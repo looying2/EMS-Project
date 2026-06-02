@@ -286,6 +286,7 @@ ss_init("ml_summary", {})
 ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
+ML_CALL_INTERVAL = 5  # seconds between ML API calls
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
@@ -364,7 +365,7 @@ def read_latest_emg_data():
     """
     try:
         url = "https://ems-project-7ea46-default-rtdb.asia-southeast1.firebasedatabase.app/emg_data.json?orderBy=\"$key\"&limitToLast=1"
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
         data = response.json()
         if data:
             latest_key = list(data.keys())[-1]
@@ -766,15 +767,18 @@ if st.session_state.connected:
     update_telemetry_stream()
     print("Latest EMG:", st.session_state.telemetry['emg'].iloc[-1] if not st.session_state.telemetry.empty else "No data")
 
-    # 2. If session is active, call the remote ML API (no arguments – it reads Firebase itself)
+    # 2. If session is active, call the remote ML API only every ML_CALL_INTERVAL seconds
     if st.session_state.system_status == "ACTIVE":
-        prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-        st.session_state.ml_prediction = prediction
-        st.session_state.ml_probability = confidence
-        st.session_state.ml_summary = summary
-        st.session_state.ml_latest = latest
-        st.session_state.ml_probabilities = probabilities
-        st.session_state.ml_session = session
+        now_ts = time.time()
+        if now_ts - st.session_state.last_ml_call_time >= ML_CALL_INTERVAL:
+            prediction, confidence, summary, latest, probabilities, session = call_ml_api()
+            st.session_state.ml_prediction = prediction
+            st.session_state.ml_probability = confidence
+            st.session_state.ml_summary = summary
+            st.session_state.ml_latest = latest
+            st.session_state.ml_probabilities = probabilities
+            st.session_state.ml_session = session
+            st.session_state.last_ml_call_time = now_ts
     else:
         st.session_state.ml_prediction = "WAITING"
         st.session_state.ml_probability = 0.0
@@ -1686,5 +1690,5 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
 # 11. AUTO REFRESH
 # ==========================================
 if st.session_state.system_status == "ACTIVE":
-    time.sleep(0.2)
+    time.sleep(1.0)   # refresh telemetry chart every ~1 s; ML API is gated separately
     st.rerun()
