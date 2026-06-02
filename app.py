@@ -414,26 +414,13 @@ def update_telemetry_stream():
     df = st.session_state.telemetry.copy()
     now = datetime.now().strftime("%H:%M:%S")
     if st.session_state.system_status == "ACTIVE":
-
-    current_time = time.time()
-
-    # Call remote ML backend every 3 seconds only
-    if st.session_state.system_status == "ACTIVE":
-
-    current_time = time.time()
-
-    # Call ML backend every 3 seconds only
-    if current_time - st.session_state.last_ml_call_time >= 3:
-
-        prediction, confidence, summary, latest, probabilities, session = call_ml_api()
-
-        st.session_state.ml_prediction = prediction
-        st.session_state.ml_probability = confidence
-        st.session_state.ml_summary = summary
-        st.session_state.ml_latest = latest
-        st.session_state.ml_probabilities = probabilities
-        st.session_state.ml_session = session
-        st.session_state.last_ml_call_time = current_time
+        raw_emg, esp_state, esp_mode, esp_channel = read_latest_emg_data()
+        emg = smooth_emg(raw_emg)
+        hr = int(np.clip(np.random.normal(74, 3), 60, 110))
+        imp = float(np.clip(np.random.normal(1.2, 0.1), 0.7, 2.5))
+        st.session_state.esp_state = esp_state
+        st.session_state.esp_mode = esp_mode
+        st.session_state.esp_channel = esp_channel
     else:
         emg = np.random.normal(0, 2)
         hr = int(np.random.normal(72, 2))
