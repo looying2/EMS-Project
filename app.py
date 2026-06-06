@@ -1397,7 +1397,7 @@ if user_role == "Doctor":
 
         with _col_cards:
             st.markdown("#### Soft Lean Mass (kg)")
-            for _seg, _mass, _chg, _pct, _stat, _icon in zip(_seg_names, _masses, _changes, _pcts, _statuses, _icons):
+            for _seg, _mass, _chg, _pct, _stat, _icon in zip(_seg_names, _masses, _changes, _pcts, _statuses):
                 _cc, _arr = _change_meta(_chg)
                 _sc = _seg_color(_pct)
                 _disp = _chg if _chg.startswith("-") else (f"+{_chg}" if _chg != "0.00" else "0.0")
