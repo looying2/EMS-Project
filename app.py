@@ -1535,8 +1535,8 @@ if user_role == "Doctor":
 
         # Segmental Lean Mass Analysis
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("💪 Segmental Lean Mass Analysis")
-        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
+        st.subheader("Segmental Lean Mass Analysis")
+        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment")
 
         segments = ["Left Arm", "Trunk",  "Right Arm", "Left Leg", "Right Leg"]
         pcts     = [65.3,        84.8,     69.8,         93.4,       93.9      ]
@@ -1554,108 +1554,129 @@ if user_role == "Doctor":
         la_c=seg_color(pcts[0]); tr_c=seg_color(pcts[1]); ra_c=seg_color(pcts[2])
         ll_c=seg_color(pcts[3]); rl_c=seg_color(pcts[4])
 
-        # Professional anatomical body silhouette using realistic SVG paths
+        la_a = "0.85" if pcts[0] < 90 else "0.85"
+        tr_a = "0.85" if pcts[1] < 90 else "0.85"
+
         body_svg = (
-            f'<svg viewBox="0 0 120 280" width="100" xmlns="http://www.w3.org/2000/svg">'
-            # head - realistic oval
-            f'<ellipse cx="60" cy="22" rx="16" ry="19" fill="#D1C4B0" stroke="#B0A090" stroke-width="0.8"/>'
-            # neck
-            f'<rect x="53" y="39" width="14" height="12" rx="3" fill="#D1C4B0" stroke="#B0A090" stroke-width="0.8"/>'
-            # torso - realistic tapered shape
-            f'<path d="M35,51 Q28,54 27,65 L26,105 Q26,112 32,114 L42,116 L78,116 L88,114 Q94,112 94,105 L93,65 Q92,54 85,51 Q75,47 60,47 Q45,47 35,51 Z" fill="{tr_c}" fill-opacity="0.85" stroke="{tr_c}" stroke-width="0.5"/>'
-            # left shoulder cap
-            f'<ellipse cx="28" cy="57" rx="9" ry="7" fill="{la_c}" fill-opacity="0.9"/>'
-            # right shoulder cap
-            f'<ellipse cx="92" cy="57" rx="9" ry="7" fill="{ra_c}" fill-opacity="0.9"/>'
-            # left upper arm
-            f'<path d="M20,54 Q14,58 13,70 L13,90 Q13,96 17,98 L26,100 Q30,98 31,90 L32,68 Q31,58 26,54 Z" fill="{la_c}" fill-opacity="0.85" stroke="{la_c}" stroke-width="0.5"/>'
-            # left forearm
-            f'<path d="M14,100 Q12,106 12,118 L13,132 Q14,137 18,138 L24,138 Q28,137 29,132 L29,118 Q29,106 27,100 Z" fill="{la_c}" fill-opacity="0.6" stroke="{la_c}" stroke-width="0.5"/>'
-            # right upper arm
-            f'<path d="M100,54 Q106,58 107,70 L107,90 Q107,96 103,98 L94,100 Q90,98 89,90 L88,68 Q89,58 94,54 Z" fill="{ra_c}" fill-opacity="0.85" stroke="{ra_c}" stroke-width="0.5"/>'
-            # right forearm
-            f'<path d="M106,100 Q108,106 108,118 L107,132 Q106,137 102,138 L96,138 Q92,137 91,132 L91,118 Q91,106 93,100 Z" fill="{ra_c}" fill-opacity="0.6" stroke="{ra_c}" stroke-width="0.5"/>'
-            # pelvis/hip area
-            f'<path d="M32,114 L88,114 Q94,116 95,124 L94,132 Q90,136 82,137 L38,137 Q30,136 26,132 L25,124 Q26,116 32,114 Z" fill="#C4B8A8" stroke="#B0A090" stroke-width="0.5"/>'
-            # left thigh
-            f'<path d="M27,132 Q24,138 24,152 L25,175 Q26,182 30,184 L40,185 Q45,183 47,175 L48,150 Q47,137 42,132 Z" fill="{ll_c}" fill-opacity="0.85" stroke="{ll_c}" stroke-width="0.5"/>'
-            # left shin
-            f'<path d="M25,185 Q23,192 23,205 L24,225 Q25,232 29,234 L37,234 Q41,232 42,225 L43,205 Q43,192 41,185 Z" fill="{ll_c}" fill-opacity="0.6" stroke="{ll_c}" stroke-width="0.5"/>'
-            # left foot
-            f'<ellipse cx="33" cy="238" rx="11" ry="5" fill="{ll_c}" fill-opacity="0.5"/>'
-            # right thigh
-            f'<path d="M93,132 Q96,138 96,152 L95,175 Q94,182 90,184 L80,185 Q75,183 73,175 L72,150 Q73,137 78,132 Z" fill="{rl_c}" fill-opacity="0.85" stroke="{rl_c}" stroke-width="0.5"/>'
-            # right shin
-            f'<path d="M95,185 Q97,192 97,205 L96,225 Q95,232 91,234 L83,234 Q79,232 78,225 L77,205 Q77,192 79,185 Z" fill="{rl_c}" fill-opacity="0.6" stroke="{rl_c}" stroke-width="0.5"/>'
-            # right foot
-            f'<ellipse cx="87" cy="238" rx="11" ry="5" fill="{rl_c}" fill-opacity="0.5"/>'
-            # face details - eyes
-            f'<ellipse cx="54" cy="20" rx="3" ry="3.5" fill="#8B7355"/>'
-            f'<ellipse cx="66" cy="20" rx="3" ry="3.5" fill="#8B7355"/>'
-            f'<ellipse cx="54" cy="20" rx="1.5" ry="2" fill="#3D2B1F"/>'
-            f'<ellipse cx="66" cy="20" rx="1.5" ry="2" fill="#3D2B1F"/>'
-            # nose
-            f'<path d="M59,24 Q60,28 61,24" stroke="#8B7355" stroke-width="1" fill="none"/>'
-            # mouth
-            f'<path d="M56,30 Q60,33 64,30" stroke="#8B7355" stroke-width="1" fill="none"/>'
+            f'<svg viewBox="0 0 340 520" width="240" xmlns="http://www.w3.org/2000/svg">'
+
+            # body base silhouette (neutral outline)
+            f'<path d="M170,8 C155,8 145,18 145,35 C145,52 155,62 170,62 C185,62 195,52 195,35 C195,18 185,8 170,8 Z" fill="#C8E6E0" stroke="#5DCAA5" stroke-width="1"/>'
+            f'<path d="M148,60 C138,64 128,72 124,82 L118,105 L115,140 L115,195 L125,195 L128,155 L130,175 L130,290 L135,290 L135,175 L138,175 L138,290 L143,290 L143,175 L148,165 L148,195 L222,195 L222,165 L227,175 L227,290 L232,290 L232,175 L235,175 L235,290 L240,290 L240,175 L212,155 L215,195 L225,195 L225,140 L222,105 L216,82 C212,72 202,64 192,60 L185,58 C181,66 175,70 170,70 C165,70 159,66 155,58 Z" fill="#C8E6E0" stroke="#5DCAA5" stroke-width="1"/>'
+
+            # trunk muscle detail
+            f'<path d="M148,90 L148,185 L192,185 L192,90 Z" fill="{tr_c}" fill-opacity="0.5"/>'
+            f'<path d="M152,100 L152,130 L168,130 L168,100 Z" fill="{tr_c}" fill-opacity="0.35" rx="4"/>'
+            f'<path d="M172,100 L172,130 L188,130 L188,100 Z" fill="{tr_c}" fill-opacity="0.35"/>'
+            f'<path d="M152,134 L152,160 L168,160 L168,134 Z" fill="{tr_c}" fill-opacity="0.35"/>'
+            f'<path d="M172,134 L172,160 L188,160 L188,134 Z" fill="{tr_c}" fill-opacity="0.35"/>'
+            f'<line x1="152" y1="130" x2="188" y2="130" stroke="{tr_c}" stroke-width="0.8" stroke-opacity="0.6"/>'
+            f'<line x1="152" y1="160" x2="188" y2="160" stroke="{tr_c}" stroke-width="0.8" stroke-opacity="0.6"/>'
+            f'<line x1="170" y1="90" x2="170" y2="185" stroke="{tr_c}" stroke-width="0.8" stroke-opacity="0.6"/>'
+
+            # left arm segments
+            f'<path d="M117,82 C110,85 105,95 104,108 L103,145 C103,152 107,157 114,158 L126,158 C130,155 131,148 130,140 L128,105 C126,95 122,87 117,82 Z" fill="{la_c}" fill-opacity="0.8" stroke="{la_c}" stroke-width="0.8"/>'
+            f'<path d="M104,162 C101,168 100,178 100,190 L101,220 C102,228 106,232 112,232 L122,232 C127,230 129,224 128,216 L127,186 C127,175 125,166 121,162 Z" fill="{la_c}" fill-opacity="0.55" stroke="{la_c}" stroke-width="0.8"/>'
+            # left arm muscle line
+            f'<path d="M112,90 C108,100 107,115 108,128" stroke="{la_c}" stroke-width="1.5" fill="none" stroke-opacity="0.7"/>'
+
+            # right arm segments
+            f'<path d="M223,82 C230,85 235,95 236,108 L237,145 C237,152 233,157 226,158 L214,158 C210,155 209,148 210,140 L212,105 C214,95 218,87 223,82 Z" fill="{ra_c}" fill-opacity="0.8" stroke="{ra_c}" stroke-width="0.8"/>'
+            f'<path d="M236,162 C239,168 240,178 240,190 L239,220 C238,228 234,232 228,232 L218,232 C213,230 211,224 212,216 L213,186 C213,175 215,166 219,162 Z" fill="{ra_c}" fill-opacity="0.55" stroke="{ra_c}" stroke-width="0.8"/>'
+            f'<path d="M228,90 C232,100 233,115 232,128" stroke="{ra_c}" stroke-width="1.5" fill="none" stroke-opacity="0.7"/>'
+
+            # pelvis
+            f'<path d="M135,192 L135,210 C135,218 138,222 145,224 L195,224 C202,222 205,218 205,210 L205,192 Z" fill="#A8D5CE" stroke="#5DCAA5" stroke-width="0.8"/>'
+
+            # left leg segments
+            f'<path d="M136,222 C132,228 130,240 130,256 L131,295 C132,304 137,308 144,308 L155,308 C161,306 163,298 162,290 L161,254 C160,240 157,230 152,224 Z" fill="{ll_c}" fill-opacity="0.8" stroke="{ll_c}" stroke-width="0.8"/>'
+            f'<path d="M131,312 C129,320 128,333 129,348 L130,385 C131,394 136,398 143,398 L153,398 C158,396 160,388 159,380 L158,346 C157,332 154,320 149,312 Z" fill="{ll_c}" fill-opacity="0.55" stroke="{ll_c}" stroke-width="0.8"/>'
+            f'<path d="M143,228 C140,242 139,260 140,276" stroke="{ll_c}" stroke-width="1.5" fill="none" stroke-opacity="0.7"/>'
+
+            # right leg segments
+            f'<path d="M204,222 C208,228 210,240 210,256 L209,295 C208,304 203,308 196,308 L185,308 C179,306 177,298 178,290 L179,254 C180,240 183,230 188,224 Z" fill="{rl_c}" fill-opacity="0.8" stroke="{rl_c}" stroke-width="0.8"/>'
+            f'<path d="M209,312 C211,320 212,333 211,348 L210,385 C209,394 204,398 197,398 L187,398 C182,396 180,388 181,380 L182,346 C183,332 186,320 191,312 Z" fill="{rl_c}" fill-opacity="0.55" stroke="{rl_c}" stroke-width="0.8"/>'
+            f'<path d="M197,228 C200,242 201,260 200,276" stroke="{rl_c}" stroke-width="1.5" fill="none" stroke-opacity="0.7"/>'
+
+            # feet
+            f'<ellipse cx="143" cy="405" rx="18" ry="7" fill="#A8D5CE" stroke="#5DCAA5" stroke-width="0.8"/>'
+            f'<ellipse cx="197" cy="405" rx="18" ry="7" fill="#A8D5CE" stroke="#5DCAA5" stroke-width="0.8"/>'
+
+            # L / R labels at top
+            f'<text x="120" y="76" text-anchor="middle" font-size="13" font-weight="500" fill="#5DCAA5" font-family="sans-serif">L</text>'
+            f'<text x="220" y="76" text-anchor="middle" font-size="13" font-weight="500" fill="#5DCAA5" font-family="sans-serif">R</text>'
+
+            # dotted leader lines - left arm
+            f'<line x1="103" y1="118" x2="68" y2="118" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
+            f'<circle cx="103" cy="118" r="3" fill="{la_c}"/>'
+            # left arm label
+            f'<text x="64" y="113" text-anchor="end" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[0]}</text>'
+            f'<text x="64" y="126" text-anchor="end" font-size="11" fill="#64748B" font-family="sans-serif">kg  {pcts[0]:.0f}%</text>'
+            f'<text x="64" y="139" text-anchor="end" font-size="11" font-weight="600" fill="{la_c}" font-family="sans-serif">{statuses[0]}</text>'
+
+            # dotted leader - trunk
+            f'<line x1="192" y1="138" x2="248" y2="138" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
+            f'<circle cx="192" cy="138" r="3" fill="{tr_c}"/>'
+            # trunk label
+            f'<text x="252" y="133" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[1]}</text>'
+            f'<text x="252" y="146" text-anchor="start" font-size="11" fill="#64748B" font-family="sans-serif">kg  {pcts[1]:.0f}%</text>'
+            f'<text x="252" y="159" text-anchor="start" font-size="11" font-weight="600" fill="{tr_c}" font-family="sans-serif">{statuses[1]}</text>'
+
+            # dotted leader - right arm
+            f'<line x1="237" y1="118" x2="272" y2="118" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
+            f'<circle cx="237" cy="118" r="3" fill="{ra_c}"/>'
+            # right arm label
+            f'<text x="276" y="113" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[2]}</text>'
+            f'<text x="276" y="126" text-anchor="start" font-size="11" fill="#64748B" font-family="sans-serif">kg  {pcts[2]:.0f}%</text>'
+            f'<text x="276" y="139" text-anchor="start" font-size="11" font-weight="600" fill="{ra_c}" font-family="sans-serif">{statuses[2]}</text>'
+
+            # dotted leader - left leg
+            f'<line x1="130" y1="290" x2="68" y2="310" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
+            f'<circle cx="130" cy="290" r="3" fill="{ll_c}"/>'
+            # left leg label
+            f'<text x="64" y="305" text-anchor="end" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[3]}</text>'
+            f'<text x="64" y="318" text-anchor="end" font-size="11" fill="#64748B" font-family="sans-serif">kg  {pcts[3]:.0f}%</text>'
+            f'<text x="64" y="331" text-anchor="end" font-size="11" font-weight="600" fill="{ll_c}" font-family="sans-serif">{statuses[3]}</text>'
+
+            # dotted leader - right leg
+            f'<line x1="210" y1="290" x2="272" y2="310" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
+            f'<circle cx="210" cy="290" r="3" fill="{rl_c}"/>'
+            # right leg label
+            f'<text x="276" y="305" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[4]}</text>'
+            f'<text x="276" y="318" text-anchor="start" font-size="11" fill="#64748B" font-family="sans-serif">kg  {pcts[4]:.0f}%</text>'
+            f'<text x="276" y="331" text-anchor="start" font-size="11" font-weight="600" fill="{rl_c}" font-family="sans-serif">{statuses[4]}</text>'
+
             f'</svg>'
         )
 
-        def floatlabel(name, pct, stat, p):
-            c = seg_color(p)
-            s = "Under" if p < 90 else "Normal"
-            return (
-                f'<div style="text-align:center;min-width:64px;">'
-                f'<div style="font-size:13px;color:#64748B;margin-bottom:1px;">{pct:.1f}%</div>'
-                f'<div style="font-size:12px;font-weight:600;color:{c};margin-bottom:2px;">{s}</div>'
-                f'<div style="font-size:13px;font-weight:600;color:#1E293B;">{name}</div>'
-                f'</div>'
-            )
-
-        fig_html = (
-            f'<div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;">'
-            f'{floatlabel("Trunk", pcts[1], statuses[1], pcts[1])}'
-            f'<div style="display:flex;align-items:center;gap:20px;">'
-            f'{floatlabel("Left Arm", pcts[0], statuses[0], pcts[0])}'
-            f'<div>{body_svg}</div>'
-            f'{floatlabel("Right Arm", pcts[2], statuses[2], pcts[2])}'
-            f'</div>'
-            f'<div style="display:flex;gap:40px;">'
-            f'{floatlabel("Left Leg", pcts[3], statuses[3], pcts[3])}'
-            f'{floatlabel("Right Leg", pcts[4], statuses[4], pcts[4])}'
-            f'</div>'
-            f'</div>'
-        )
-
-        cards_html = '<div style="display:flex;flex-direction:column;gap:8px;">'
-        for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
-            cc, cbg, arr = change_meta(change)
-            sc = seg_color(pct)
-            disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
-            cards_html += (
-                f'<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;'
-                f'padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">'
-                f'<div>'
-                f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.06em;'
-                f'text-transform:uppercase;margin-bottom:3px;">{seg}</div>'
-                f'<div style="font-size:22px;font-weight:700;color:#0F172A;line-height:1.1;">'
-                f'{mass}<span style="font-size:13px;font-weight:400;color:#64748B;margin-left:3px;">kg</span></div>'
-                f'<div style="font-size:12px;font-weight:600;color:{sc};margin-top:2px;">{stat} · {pct:.1f}%</div>'
-                f'</div>'
-                f'<div style="background:{cbg};border-radius:8px;padding:6px 12px;text-align:center;min-width:52px;">'
-                f'<div style="font-size:16px;color:{cc};">{arr}</div>'
-                f'<div style="font-size:12px;font-weight:600;color:{cc};">{disp}</div>'
-                f'</div>'
-                f'</div>'
-            )
-        cards_html += '</div>'
-
-        col_fig, col_cards = st.columns([1, 1.1], gap="large")
+        col_fig, col_cards = st.columns([1, 1], gap="large")
         with col_fig:
-            st.markdown(fig_html, unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="display:flex;justify-content:center;align-items:center;padding:8px 0;">{body_svg}</div>',
+                unsafe_allow_html=True
+            )
         with col_cards:
+            cards_html = '<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px;">'
+            for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
+                cc, cbg, arr = change_meta(change)
+                sc = seg_color(pct)
+                disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
+                cards_html += (
+                    f'<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;'
+                    f'padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">'
+                    f'<div>'
+                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:3px;">{seg}</div>'
+                    f'<div style="font-size:22px;font-weight:700;color:#0F172A;line-height:1.1;">{mass}<span style="font-size:13px;font-weight:400;color:#64748B;margin-left:3px;">kg</span></div>'
+                    f'<div style="font-size:12px;font-weight:600;color:{sc};margin-top:2px;">{stat} · {pct:.1f}%</div>'
+                    f'</div>'
+                    f'<div style="background:{cbg};border-radius:8px;padding:6px 12px;text-align:center;min-width:52px;">'
+                    f'<div style="font-size:16px;color:{cc};">{arr}</div>'
+                    f'<div style="font-size:12px;font-weight:600;color:{cc};">{disp}</div>'
+                    f'</div></div>'
+                )
+            cards_html += '</div>'
             st.markdown(cards_html, unsafe_allow_html=True)
-            st.caption("↑↓ Change from previous measurement")
+            st.caption("Change from previous measurement")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Long-Term Musculoskeletal Health
