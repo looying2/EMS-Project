@@ -288,6 +288,7 @@ ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
 ML_CALL_INTERVAL = 5  # seconds between ML API calls
+SESSION_DURATION_MINUTES = 20   # fixed EMS protocol duration in minutes
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
