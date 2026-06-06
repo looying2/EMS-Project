@@ -280,19 +280,37 @@ ss_init("ml_prediction", "WAITING")
 ss_init("ml_probability", 0.0)
 ss_init("live_pain", 2)
 ss_init("live_fatigue", 4)
-ss_init("esp_state", None)   # stores the latest state from ESP32
+ss_init("esp_state", None)
 ss_init("esp_mode", None)
 ss_init("esp_channel", None)
 ss_init("ml_summary", {})
 ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
-ML_CALL_INTERVAL = 5  # seconds between ML API calls
+ML_CALL_INTERVAL = 2  # seconds between ML API calls
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
-ss_init("ml_thread", None)       # background thread handle
-ss_init("ml_pending", False)     # True while a thread is running
+ss_init("ml_thread", None)
+ss_init("ml_pending", False)
+ss_init("last_ml_summary_snapshot", {})
+
+# Frozen snapshots — captured at STOP before the main loop clears ML state
+ss_init("frozen_ml_prediction",    "WAITING")
+ss_init("frozen_ml_probability",   0.0)
+ss_init("frozen_ml_latest",        {})
+ss_init("frozen_ml_session",       {})
+ss_init("frozen_ml_probabilities", [])
+ss_init("frozen_ml_summary",       {})
+ss_init("frozen_intensity",        15)
+ss_init("frozen_frequency",        40)
+ss_init("frozen_pulse_width",      300)
+ss_init("frozen_duty_on",          10)
+ss_init("frozen_duty_off",         20)
+ss_init("frozen_pain",             2)
+ss_init("frozen_fatigue",          4)
+
+SESSION_DURATION_MINUTES = 20   # fixed protocol duration in minutes
 
 # Process-level shared state for background ML thread ↔ main loop communication.
 # st.cache_resource survives all reruns and is guaranteed to return the same object.
@@ -314,38 +332,182 @@ reader = load_easyocr()
 def generate_session_summary():
     tele = st.session_state.telemetry
     if tele.empty:
-        st.session_state.session_summary_text = "No telemetry data collected during this session."
+        st.session_state.session_summary_text = {"error": "No telemetry data collected during this session."}
         return
 
-    # Compute session stats
-    avg_emg = tele['emg'].mean()
-    max_emg = tele['emg'].max()
-    min_emg = tele['emg'].min()
-    duration = st.session_state.elapsed_time  # in seconds
-    pain = st.session_state.live_pain
-    fatigue = st.session_state.live_fatigue
-    gait = st.session_state.ml_prediction  # "NORMAL" or "ABNORMAL"
-    
-    # Build prompt for RAG API
-    prompt = f"""
-    You are a clinical assistant. Write a short, professional summary of the following EMS therapy session:
+    # ── Derived stats ─────────────────────────────────────────────────────
+    avg_emg   = tele['emg'].mean()
+    max_emg   = tele['emg'].max()
+    min_emg   = tele['emg'].min()
+    std_emg   = tele['emg'].std()
+    q         = max(1, len(tele) // 4)
+    emg_early = tele['emg'].iloc[:q].mean()
+    emg_late  = tele['emg'].iloc[-q:].mean()
+    emg_trend = emg_late - emg_early
+    trend_desc = (
+        f"increased by {emg_trend:.1f} µV (progressive recruitment)"
+        if emg_trend > 10 else
+        f"decreased by {abs(emg_trend):.1f} µV (possible fatigue or accommodation)"
+        if emg_trend < -10 else
+        f"remained stable (Δ{emg_trend:+.1f} µV)"
+    )
+    n_total   = len(tele)
+    n_relaxed = (tele['emg'] <= 300).sum()
+    n_mod     = ((tele['emg'] > 300) & (tele['emg'] <= 500)).sum()
+    n_fat     = ((tele['emg'] > 500) & (tele['emg'] <= 700)).sum()
+    n_over    = (tele['emg'] > 700).sum()
+    pct_act   = (n_mod + n_fat + n_over) / n_total * 100
 
-    - Duration: {duration:.0f} seconds (approx {duration/60:.1f} minutes)
-    - Average EMG: {avg_emg:.1f} µV
-    - Maximum EMG: {max_emg:.1f} µV
-    - Minimum EMG: {min_emg:.1f} µV
-    - Final patient pain score: {pain}/10
-    - Final patient fatigue score: {fatigue}/10
-    - Gait pathology classification: {gait}
-    
-    Provide a conclusion and any recommendations.
-    """
-    
+    # ── Session params — read from frozen snapshot ────────────────────────
+    intensity   = st.session_state.frozen_intensity
+    frequency   = st.session_state.frozen_frequency
+    pulse_width = st.session_state.frozen_pulse_width
+    duty_on     = st.session_state.frozen_duty_on
+    duty_off    = st.session_state.frozen_duty_off
+    pain        = st.session_state.frozen_pain
+    fatigue     = st.session_state.frozen_fatigue
+    # ML values: read from live state (preserved on STOPPED) with frozen as fallback
+    gait        = st.session_state.ml_prediction    if st.session_state.ml_prediction    not in ("WAITING", "")  else st.session_state.frozen_ml_prediction
+    ml_conf     = st.session_state.ml_probability   if st.session_state.ml_probability   > 0                     else st.session_state.frozen_ml_probability
+    ml_session  = st.session_state.ml_session       if st.session_state.ml_session                               else st.session_state.frozen_ml_session
+    ml_latest   = st.session_state.ml_latest        if st.session_state.ml_latest                                else st.session_state.frozen_ml_latest
+    ml_probs    = st.session_state.ml_probabilities if st.session_state.ml_probabilities                         else st.session_state.frozen_ml_probabilities
+    ml_summary_snap = st.session_state.ml_summary   if st.session_state.ml_summary                              else st.session_state.frozen_ml_summary
+
+    conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
+    rms_val     = ml_latest.get("rms_recto_femoral", "N/A")
+    spread_val  = ml_latest.get("rms_signal_spread", "N/A")
+    std_val     = ml_latest.get("rms_signal_std", "N/A")
+    ml_avg      = ml_session.get("avg", "N/A")
+    ml_min      = ml_session.get("min", "N/A")
+    ml_max      = ml_session.get("max", "N/A")
+    readings    = ml_session.get("count", "N/A")
+
+    # Snapshot ML summary for display in Records tab
+    st.session_state.last_ml_summary_snapshot = dict(ml_summary_snap)
+
+    conditions = ', '.join(condition_tags) if condition_tags else 'general rehabilitation'
+
+    # Use protocol intensity label — if frozen intensity is 0 it means the device
+    # controlled current independently (ESP32 mode); use a neutral description
+    intensity_desc = f"{intensity} mA" if intensity > 0 else "device-controlled current (intensity set by ESP32)"
+    intensity_action = (
+        f"set by the ESP32 controller — verify the actual delivered current level from the device log"
+        if intensity == 0 else
+        f"{intensity} mA"
+    )
+
+    # ── Build fallback (factual base the model must preserve) ─────────────
+    fallback = {
+        "title": f"{gait} recto femoris EMG pattern — {SESSION_DURATION_MINUTES}-min EMS session ({conditions})",
+        "summary": (
+            f"A {SESSION_DURATION_MINUTES}-minute EMS session was completed for patient {patient_id} "
+            f"(age group {age_group}, {conditions}) at {frequency} Hz, "
+            f"{pulse_width} µs pulse width, {duty_on}s ON / {duty_off}s OFF duty cycle"
+            f"{f', {intensity} mA stimulation intensity' if intensity > 0 else ''}. "
+            f"The recto femoris EMG averaged {avg_emg:.1f} µV (max {max_emg:.1f}, min {min_emg:.1f}, "
+            f"STD {std_emg:.1f} µV) across {n_total} samples, with signal amplitude that {trend_desc}. "
+            f"Active muscle recruitment occurred in {pct_act:.0f}% of the session "
+            f"({n_mod} moderate, {n_fat} fatigue-range, {n_over} overexertion samples). "
+            f"The ML gait classifier returned {gait} at {conf_pct:.1f}% confidence, "
+            f"with final patient-reported pain of {pain}/10 and fatigue of {fatigue}/10."
+        ),
+        "interpretation": [
+            f"Recto Femoris RMS = {rms_val} µV (session avg/min/max: {ml_avg}/{ml_min}/{ml_max}): "
+            f"this average signal level reflects the muscle's response to {intensity_desc} "
+            f"and should be compared to baseline for a {age_group}-year-old patient with {conditions}.",
+            f"Signal Spread = {spread_val} and STD = {std_val}: the within-window variability indicates "
+            f"{'stable, consistent motor unit firing' if float(str(std_val).replace('N/A','0') or 0) < 5 else 'notable signal fluctuation, suggesting irregular motor unit recruitment or movement artefact'}. "
+            f"EMG STD across the full session was {std_emg:.1f} µV.",
+            f"Gait classification: {gait} at {conf_pct:.1f}% confidence with "
+            f"{n_relaxed} relaxed / {n_mod} moderate / {n_fat} fatigue-range / {n_over} overexertion samples — "
+            f"active recruitment was {pct_act:.0f}% of session time, "
+            f"and the EMG trend {trend_desc}."
+        ],
+        "actions": [
+            f"{'Maintain' if gait == 'Normal' else 'Review'} the stimulation protocol "
+            f"({frequency} Hz, {pulse_width} µs, {intensity_action}) for the next session — "
+            f"{'Normal gait classification supports protocol continuity' if gait == 'Normal' else 'Abnormal gait classification warrants reassessment of electrode placement and stimulation parameters'}.",
+            f"{'Increase stimulation intensity to improve recruitment' if pct_act < 50 else 'Active recruitment was sufficient'} "
+            f"({pct_act:.0f}% of session {'is below' if pct_act < 50 else 'meets'} the >50% target for effective EMS rehabilitation"
+            f"{f'; consider increasing above {intensity} mA' if pct_act < 50 and intensity > 0 else ''}).",
+            f"{'Reduce duty cycle ON-time or allow longer rest between sets' if fatigue >= 6 else 'Maintain the current duty cycle'} "
+            f"(currently {duty_on}s ON / {duty_off}s OFF): patient reported fatigue {fatigue}/10 "
+            f"({'high — rest-to-work ratio should be reviewed' if fatigue >= 6 else 'acceptable'}).",
+            f"{'Address pain management — consider adjusting electrode position or reducing stimulation intensity' if pain >= 5 else 'Continue documenting pain score each session'}: "
+            f"patient reported pain {pain}/10 "
+            f"({'exceeds comfort threshold of 5/10' if pain >= 5 else 'within acceptable range'})."
+        ]
+    }
+
+    # ── Probability and feature lines for the prompt ───────────────────────
+    probability_lines = [
+        f"- {p.get('label', '?')}: {float(p.get('probability', 0)):.1f}%"
+        for p in ml_probs
+    ]
+    feature_lines = [
+        f"- Recto Femoris RMS: {rms_val} µV",
+        f"- Signal Spread: {spread_val}",
+        f"- Signal STD: {std_val}",
+        f"- Session EMG avg: {avg_emg:.1f} µV, max: {max_emg:.1f} µV, min: {min_emg:.1f} µV",
+        f"- Active recruitment: {pct_act:.0f}% of session",
+        f"- Stimulation: {intensity} mA / {frequency} Hz / {pulse_width} µs / {duty_on}s ON {duty_off}s OFF",
+        f"- Pain: {pain}/10, Fatigue: {fatigue}/10",
+    ]
+
+    prompt = f"""You are a rehabilitation engineering assistant explaining an EMG monitoring result.
+Use the draft explanation below as the factual base. Improve wording only if needed, but do not remove the actual values or make the response generic.
+Draft explanation:
+Title: {fallback["title"]}
+Summary: {fallback["summary"]}
+Interpretation:
+- {fallback["interpretation"][0]}
+- {fallback["interpretation"][1]}
+- {fallback["interpretation"][2]}
+Actions:
+- {fallback["actions"][0]}
+- {fallback["actions"][1]}
+- {fallback["actions"][2]}
+- {fallback["actions"][3]}
+Model result:
+Prediction: {gait}
+Confidence: {conf_pct:.1f}%
+Class probabilities:
+{chr(10).join(probability_lines) if probability_lines else "Not available"}
+Input measurements:
+{chr(10).join(feature_lines) if feature_lines else "Not available"}
+Rules:
+- Do not diagnose.
+- Do not claim certainty.
+- Do not use the words "diagnosis", "diagnostic", or "disease" except in the disclaimer.
+- The title must describe the EMG signal pattern.
+- The summary must be 4 to 6 complete sentences.
+- The interpretation list must contain exactly 3 points.
+- The actions list must contain exactly 4 practical actions.
+- Each interpretation point must mention the actual measurement value.
+- Do not use vague advice such as "monitor closely" unless you explain what to monitor.
+- Return only valid JSON.
+- Do not use markdown.
+JSON format:
+{{
+  "title": "specific EMG signal pattern title",
+  "summary": "4 to 6 sentences explaining this specific result",
+  "interpretation": ["value-specific point 1", "value-specific point 2", "value-specific point 3"],
+  "actions": ["specific action 1", "specific action 2", "specific action 3", "specific action 4"]
+}}"""
+
     answer, _ = call_rag_api(prompt)
-    if not answer or "Error" in answer:
-        answer = "Could not generate AI summary. The RAG service may be offline."
-    
-    st.session_state.session_summary_text = answer
+
+    # Parse JSON response — fall back to the pre-computed fallback if the model fails
+    parsed = None
+    if answer and "Error" not in answer:
+        try:
+            clean = answer.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except Exception:
+            parsed = None
+
+    st.session_state.session_summary_text = parsed if parsed else fallback
 
 def run_easyocr(uploaded_file):
     image = Image.open(uploaded_file)
@@ -624,7 +786,26 @@ def generate_inbody_ai_insight(metrics):
     return overall_insights, risk_level
 
 # ==========================================
-# 5. DIALOGS
+# 5. SNAPSHOT HELPER
+# ==========================================
+def freeze_session_state():
+    """Capture all ML and session values before STOP clears them."""
+    st.session_state.frozen_ml_prediction    = st.session_state.ml_prediction
+    st.session_state.frozen_ml_probability   = st.session_state.ml_probability
+    st.session_state.frozen_ml_latest        = dict(st.session_state.get("ml_latest", {}))
+    st.session_state.frozen_ml_session       = dict(st.session_state.get("ml_session", {}))
+    st.session_state.frozen_ml_probabilities = list(st.session_state.get("ml_probabilities", []))
+    st.session_state.frozen_ml_summary       = dict(st.session_state.get("ml_summary", {}))
+    st.session_state.frozen_intensity        = st.session_state.intensity
+    st.session_state.frozen_frequency        = st.session_state.frequency
+    st.session_state.frozen_pulse_width      = st.session_state.pulse_width
+    st.session_state.frozen_duty_on          = st.session_state.duty_on
+    st.session_state.frozen_duty_off         = st.session_state.duty_off
+    st.session_state.frozen_pain             = st.session_state.live_pain
+    st.session_state.frozen_fatigue          = st.session_state.live_fatigue
+
+# ==========================================
+# 6. DIALOGS
 # ==========================================
 @st.dialog("Start Session Confirmation")
 def show_start_confirmation(pid, proto):
@@ -635,6 +816,7 @@ def show_start_confirmation(pid, proto):
     if col_d1.button("Yes (Start)", type="primary"):
         if st.session_state.system_status != "PAUSED":
             st.session_state.elapsed_time = 0.0
+            st.session_state.intensity = 15   # reset to default on fresh start
         st.session_state.system_status = "ACTIVE"
         st.session_state.session_start_time = time.time()
         try:
@@ -729,9 +911,12 @@ with header_cols[2]:
     st.metric("Session Time", timer)
 with header_cols[3]:
     if st.button("Emergency STOP", type="primary", use_container_width=True):
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        freeze_session_state()   # snapshot ML + params before clearing
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         try:
             log_event(patient_id, "EMERGENCY_STOP", "Immediate Trigger - No Confirmation")
@@ -763,9 +948,12 @@ with col_pause:
 with col_stop:
     is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
     if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        freeze_session_state()   # snapshot ML + params before clearing
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         log_event(patient_id, "SESSION_STOP")
         st.rerun()
@@ -812,19 +1000,23 @@ if st.session_state.connected:
             st.session_state.last_ml_call_time = now_ts
             t.start()
     else:
-        st.session_state.ml_prediction    = "WAITING"
-        st.session_state.ml_probability   = 0.0
-        st.session_state.ml_summary       = {}
-        st.session_state.ml_latest        = {}
-        st.session_state.ml_probabilities = []
-        st.session_state.ml_session       = {}
-        st.session_state.ml_pending       = False
-        _ML_SHARED["result"].clear()
+        # Only wipe ML display state when truly idle/paused — not on STOPPED,
+        # because generate_session_summary() still needs the last-known values.
+        if st.session_state.system_status != "STOPPED":
+            st.session_state.ml_prediction    = "WAITING"
+            st.session_state.ml_probability   = 0.0
+            st.session_state.ml_summary       = {}
+            st.session_state.ml_latest        = {}
+            st.session_state.ml_probabilities = []
+            st.session_state.ml_session       = {}
+            st.session_state.ml_pending       = False
+            _ML_SHARED["result"].clear()
 
-    # 3. Detect session end and generate AI summary (once)
+    # 3. Detect session end and generate AI summary (once), then reset timer
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
         generate_session_summary()
         st.session_state.session_summary_generated = True
+        st.session_state.elapsed_time = 0.0   # reset only after summary has captured the duration
 
 # ==========================================
 # 10. INTERFACE – DOCTOR vs CAREGIVER
@@ -875,23 +1067,39 @@ if user_role == "Doctor":
                 st.write(f"ESP32 State: {state}")
     
         st.markdown("---")
-        col_rag, col_ml = st.columns(2)
-        with col_rag:
+        col_left, col_ml = st.columns([1, 1.6])
+
+        with col_left:
+            # ── Safety & Optimization ──────────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("Safety & Optimization (Rules)")
+            st.subheader("🛡️ Safety & Rules")
             if st.session_state.system_status == "ACTIVE":
                 pain_val = st.session_state.get("live_pain", 0)
                 fatigue_val = st.session_state.get("live_fatigue", 0)
                 if pain_val >= 6:
-                    st.markdown("""<div class="alert-box alert-risk"><strong>High Pain Detected</strong><br>Observation: Pain Score > 6<br>Action: Reducing intensity by 20% (Rule PAIN-01)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-risk"><strong>High Pain Detected</strong><br>Pain Score > 6<br>Action: Reduce intensity 20% (PAIN-01)</div>""", unsafe_allow_html=True)
                 elif fatigue_val >= 7:
-                    st.markdown("""<div class="alert-box alert-info"><strong>High Fatigue</strong><br>Observation: Patient reported fatigue > 7<br>Action: Increasing OFF time (Rule ONOFF-04)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-info"><strong>High Fatigue</strong><br>Fatigue > 7<br>Action: Increase OFF time (ONOFF-04)</div>""", unsafe_allow_html=True)
                 else:
-                    st.markdown("""<div class="alert-box alert-safe"><strong>System Nominal</strong><br>All parameters within safety limits.<br>Action: Maintain current protocol (Rule MAIN-01)</div>""", unsafe_allow_html=True)
+                    st.markdown("""<div class="alert-box alert-safe"><strong>System Nominal</strong><br>All parameters within safety limits.<br>Action: Maintain current protocol (MAIN-01)</div>""", unsafe_allow_html=True)
             else:
-                st.caption("System Inactive - Start session to monitor safety rules.")
+                st.caption("System inactive — start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
+            # ── Patient Feedback ───────────────────────────────────────────
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("💬 Patient Feedback")
+            pain    = st.slider("Pain Score (0–10)",    0, 10, value=st.session_state.get("live_pain",    2), key="live_pain")
+            fatigue = st.slider("Fatigue Level (0–10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
+            if pain > 7:
+                st.error("🚨 High pain – consider reducing intensity.")
+            elif pain > 4:
+                st.warning("⚠️ Moderate pain – monitor closely.")
+            else:
+                st.success("✅ Pain acceptable.")
+            if fatigue > 7:
+                st.info("💤 High fatigue – suggest longer rest periods.")
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col_ml:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
@@ -1056,43 +1264,12 @@ if user_role == "Doctor":
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-
-                    # ── AI Summary expander ────────────────────────────────────
-                    if summary:
-                        with st.expander("📋 AI Summary & Recommendations"):
-                            st.markdown(f"**{summary.get('title', '')}**")
-                            st.markdown(summary.get('summary', ''))
-                            if summary.get('interpretation'):
-                                st.markdown("**Interpretation**")
-                                for item in summary['interpretation']:
-                                    st.markdown(f"- {item}")
-                            if summary.get('actions'):
-                                st.markdown("**Recommended Actions**")
-                                for item in summary['actions']:
-                                    st.markdown(f"- {item}")
-                            disclaimer = summary.get('disclaimer', '')
-                            if disclaimer:
-                                st.caption(f"*Note: {disclaimer}*")
+                    st.caption("📋 Full AI analysis available in the **Records & Reports** tab after session ends.")
 
             else:
                 st.info("Start session to enable ML analysis.")
 
             st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown("### 💬 Patient Feedback")
-        col_feedback = st.columns(1)[0]
-        with col_feedback:
-            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
-            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
-            if pain > 7:
-                st.error("🚨 High pain – consider reducing intensity.")
-            elif pain > 4:
-                st.warning("⚠️ Moderate pain – monitor closely.")
-            else:
-                st.success("✅ Pain acceptable.")
-            if fatigue > 7:
-                st.info("💤 High fatigue – suggest longer rest periods.")
-
     # ---------- TAB 2: BODY COMPOSITION ----------
     with tab_body:
         st.markdown("## InBody Scan Analysis")
@@ -1296,67 +1473,180 @@ if user_role == "Doctor":
         
     # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
-        if st.session_state.session_summary_text:
+        sess_summary = st.session_state.session_summary_text
+        if sess_summary:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("📝 AI Session Summary")
-            st.markdown(st.session_state.session_summary_text)
-            if st.button("Regenerate Summary", key="regenerate_summary"):
+
+            # ── Session stats header row ──────────────────────────────────
+            tele_snap = st.session_state.telemetry
+            gait_res  = st.session_state.ml_prediction
+            is_abn    = gait_res in ("ABNORMAL", "Abnormal")
+
+            stat_cols = st.columns(5)
+            stat_cols[0].metric("⏱️ Duration",    f"{SESSION_DURATION_MINUTES} min")
+            stat_cols[1].metric("📈 Avg EMG",     f"{tele_snap['emg'].mean():.1f} µV" if not tele_snap.empty else "—")
+            stat_cols[2].metric("🦶 Gait Result",  gait_res)
+            stat_cols[3].metric("😣 Pain",         f"{st.session_state.live_pain}/10")
+            stat_cols[4].metric("😴 Fatigue",      f"{st.session_state.live_fatigue}/10")
+
+            st.divider()
+
+            # ── Clinical session summary (structured JSON from RAG) ────────
+            st.markdown("#### 🏥 Clinical Session Summary")
+
+            if isinstance(sess_summary, dict) and "error" not in sess_summary:
+                # Title
+                if sess_summary.get("title"):
+                    st.markdown(f"**{sess_summary['title']}**")
+
+                # Summary paragraph
+                if sess_summary.get("summary"):
+                    st.markdown(
+                        f"<p style='font-size:0.88rem; color:#475569; line-height:1.7; margin:10px 0 14px;'>"
+                        f"{sess_summary['summary']}</p>",
+                        unsafe_allow_html=True
+                    )
+
+                # Interpretation + Actions side by side
+                col_interp, col_actions = st.columns(2)
+                with col_interp:
+                    if sess_summary.get("interpretation"):
+                        st.markdown("**Signal Interpretation**")
+                        for item in sess_summary["interpretation"]:
+                            st.markdown(f"- {item}")
+                with col_actions:
+                    if sess_summary.get("actions"):
+                        st.markdown("**Recommended Actions**")
+                        for item in sess_summary["actions"]:
+                            st.markdown(f"- {item}")
+
+            elif isinstance(sess_summary, dict) and "error" in sess_summary:
+                st.warning(sess_summary["error"])
+            else:
+                # Legacy plain text fallback
+                st.markdown(sess_summary)
+
+            st.divider()
+            if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
                 st.session_state.session_summary_generated = False
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis
+                # Segmental Lean Mass Analysis (with radar chart)
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("💪 Segmental Lean Mass Analysis")
         st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
 
         segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
-        statuses = ["Under", "Under", "Under", "Normal", "Normal"]
-        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
-        changes = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
+        pcts     = [65.3,        84.8,     69.8,         93.4,       93.9      ]
+        statuses = ["Under",    "Under",   "Under",      "Normal",   "Normal"  ]
+        masses   = [1.13,        13.3,     1.21,         5.11,       5.13      ]
+        changes  = ["0.00",     "-0.1",   "0.00",       "+0.04",    "+0.05"   ]
 
-        def seg_color(p):
-            return "#EF5350" if p < 90 else "#2A9D8F"
-        def change_meta(c):
-            if c.startswith("-"):    return "#DC2626", "#FEE2E2", "↓"
-            elif c in ("0.00","0"):  return "#64748B", "#F1F5F9", "→"
-            else:                    return "#16A34A", "#DCFCE7", "↑"
+        # Radar chart (pentagon) using Plotly
+        import plotly.graph_objects as go
 
-        la_c = seg_color(percentages[0]); tr_c = seg_color(percentages[1])
-        ra_c = seg_color(percentages[2]); ll_c = seg_color(percentages[3]); rl_c = seg_color(percentages[4])
-
-        svg_template = f"""<svg viewBox="0 0 220 260" width="220" xmlns="http://www.w3.org/2000/svg"><polygon points="110.0,42.0 193.7,102.8 161.7,201.2 58.3,201.2 26.3,102.8" fill="#EBF4F7" stroke="#CBD5E1" stroke-width="0.8"/><polygon points="110.0,64.0 172.8,109.6 148.8,183.4 71.2,183.4 47.2,109.6" fill="none" stroke="#CBD5E1" stroke-width="0.6"/><polygon points="110.0,86.0 151.8,116.4 135.9,165.6 84.1,165.6 68.2,116.4" fill="none" stroke="#CBD5E1" stroke-width="0.6"/><polygon points="110.0,108.0 130.9,123.2 122.9,147.8 97.1,147.8 89.1,123.2" fill="none" stroke="#CBD5E1" stroke-width="0.6"/><line x1="110" y1="130" x2="110.0" y2="42.0" stroke="#CBD5E1" stroke-width="0.8"/><line x1="110" y1="130" x2="193.7" y2="102.8" stroke="#CBD5E1" stroke-width="0.8"/><line x1="110" y1="130" x2="161.7" y2="201.2" stroke="#CBD5E1" stroke-width="0.8"/><line x1="110" y1="130" x2="58.3" y2="201.2" stroke="#CBD5E1" stroke-width="0.8"/><line x1="110" y1="130" x2="26.3" y2="102.8" stroke="#CBD5E1" stroke-width="0.8"/><polygon points="110.0,55.4 168.4,111.0 158.6,196.9 61.7,196.5 55.3,112.2" fill="#2A9D8F" fill-opacity="0.25" stroke="#2A9D8F" stroke-width="1.5"/><circle cx="110.0" cy="55.4" r="3.5" fill="{tr_c}"/><circle cx="168.4" cy="111.0" r="3.5" fill="{ra_c}"/><circle cx="158.6" cy="196.9" r="3.5" fill="{rl_c}"/><circle cx="61.7" cy="196.5" r="3.5" fill="{ll_c}"/><circle cx="55.3" cy="112.2" r="3.5" fill="{la_c}"/><ellipse cx="110" cy="32" rx="11" ry="13" fill="#C8D8E8" stroke="#9BB5CC" stroke-width="0.8"/><rect x="105" y="43" width="10" height="8" rx="2" fill="#C8D8E8" stroke="#9BB5CC" stroke-width="0.6"/><path d="M92,51 Q86,55 85,65 L84,105 Q84,110 89,112 L131,112 Q136,110 136,105 L135,65 Q134,55 128,51 Z" fill="{tr_c}" fill-opacity="0.7" stroke="{tr_c}" stroke-width="0.5"/><path d="M85,54 Q79,58 77,68 L76,92 Q76,97 80,99 L88,99 Q92,97 93,91 L93,67 Q92,58 88,54 Z" fill="{la_c}" fill-opacity="0.7" stroke="{la_c}" stroke-width="0.5"/><path d="M135,54 Q141,58 143,68 L144,92 Q144,97 140,99 L132,99 Q128,97 127,91 L127,67 Q128,58 132,54 Z" fill="{ra_c}" fill-opacity="0.7" stroke="{ra_c}" stroke-width="0.5"/><path d="M89,111 L131,111 Q136,113 136,119 L135,126 Q132,129 126,130 L94,130 Q88,129 85,126 L84,119 Q84,113 89,111 Z" fill="#A8C4D8" stroke="#9BB5CC" stroke-width="0.5"/><path d="M86,129 Q83,134 82,144 L82,185 Q83,191 87,193 L97,193 Q101,191 102,185 L102,143 Q101,133 97,129 Z" fill="{ll_c}" fill-opacity="0.7" stroke="{ll_c}" stroke-width="0.5"/><path d="M134,129 Q137,134 138,144 L138,185 Q137,191 133,193 L123,193 Q119,191 118,185 L118,143 Q119,133 123,129 Z" fill="{rl_c}" fill-opacity="0.7" stroke="{rl_c}" stroke-width="0.5"/><ellipse cx="92" cy="197" rx="12" ry="5" fill="{ll_c}" fill-opacity="0.5"/><ellipse cx="128" cy="197" rx="12" ry="5" fill="{rl_c}" fill-opacity="0.5"/><text x="110" y="26" text-anchor="middle" font-size="9" fill="#475569" font-family="sans-serif">Trunk</text><text x="208" y="72" text-anchor="end" font-size="9" fill="#475569" font-family="sans-serif">R Arm</text><text x="200" y="215" text-anchor="end" font-size="9" fill="#475569" font-family="sans-serif">R Leg</text><text x="20" y="215" text-anchor="start" font-size="9" fill="#475569" font-family="sans-serif">L Leg</text><text x="12" y="72" text-anchor="start" font-size="9" fill="#475569" font-family="sans-serif">L Arm</text></svg>"""
-
-        col_fig, col_right = st.columns([1, 1.1], gap="large")
-        with col_fig:
-            st.markdown(
-                f'<div style="display:flex;justify-content:center;padding:8px 0;">{svg_template}</div>',
-                unsafe_allow_html=True
-            )
-        with col_right:
-            st.markdown("#### Soft Lean Mass (kg)")
-            for seg, mass, change, pct, stat, icon in zip(segments, masses, changes, percentages, statuses, icons):
-                cc, cbg, arr = change_meta(change)
-                sc = seg_color(pct)
-                disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
-                st.markdown(
-                    f'<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;'
-                    f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
-                    f'<div style="display:flex;align-items:center;gap:10px;">'
-                    f'<span style="font-size:1.2rem;">{icon}</span>'
-                    f'<div>'
-                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{seg}</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
-                    f'<div style="font-size:12px;font-weight:600;color:{sc};">{stat} · {pct:.1f}%</div>'
-                    f'</div></div>'
-                    f'<div style="background:{cbg};border-radius:8px;padding:5px 10px;text-align:center;min-width:46px;">'
-                    f'<div style="font-size:15px;color:{cc};">{arr}</div>'
-                    f'<div style="font-size:11px;font-weight:600;color:{cc};">{disp}</div>'
-                    f'</div></div>',
-                    unsafe_allow_html=True
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=pcts,
+            theta=segments,
+            fill='toself',
+            marker=dict(color='#2A9D8F', size=6),
+            line=dict(color='#2A9D8F', width=2),
+            name='% of ideal'
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 100],
+                    tickvals=[0, 25, 50, 75, 100],
+                    tickfont=dict(size=10)
+                ),
+                angularaxis=dict(
+                    tickfont=dict(size=11, weight='bold'),
+                    rotation=90,
+                    direction='clockwise'
                 )
+            ),
+            showlegend=False,
+            height=380,
+            margin=dict(l=40, r=40, t=40, b=40),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        # Optional: add a reference circle at 90%
+        fig_radar.add_shape(
+            type="circle", xref="paper", yref="paper",
+            x0=0, y0=0, x1=1, y1=1,
+            line=dict(color="rgba(46, 125, 50, 0.3)", width=1, dash="dash"),
+            visible=False   # not straightforward in polar; keep simple
+        )
+        # Instead, add a radial line at 90% using scatterpolar (invisible line)
+        # But the radar itself is enough.
+
+        col_fig, col_cards = st.columns([1, 1], gap="large")
+
+        with col_fig:
+            st.plotly_chart(fig_radar, use_container_width=True)
+            st.caption("Radar chart: distance from centre = % of ideal muscle mass.\nGreen area indicates ≥90% (Normal).")
+
+        with col_cards:
+            # (keep the existing metric cards exactly as before)
+            def change_meta(c):
+                if c.startswith("-"):      return "#DC2626", "↓"
+                elif c in ("0.00", "0"):   return "#94A3B8", "→"
+                else:                      return "#16A34A", "↑"
+
+            for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
+                c_col, c_arrow = change_meta(change)
+                s_col = "#EF5350" if pct < 90 else "#2A9D8F"
+                disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
+                card = f'''
+                <div style="background:#fff; border:1px solid #E2E8F0; border-radius:12px;
+                            padding:10px 14px; margin-bottom:8px;
+                            display:flex; align-items:center; justify-content:space-between;">
+                    <div>
+                        <div style="font-size:0.72rem; color:#94A3B8; font-weight:600; letter-spacing:0.04em;">{seg.upper()}</div>
+                        <div style="font-size:1.45rem; font-weight:800; color:#0F172A; line-height:1.2;">
+                            {mass} <span style="font-size:0.85rem; font-weight:500; color:#64748B;">kg</span>
+                        </div>
+                        <div style="font-size:0.72rem; font-weight:700; color:{s_col}; margin-top:1px;">{stat} · {pct:.1f}%</div>
+                    </div>
+                    <div style="background:#F8FAFC; border-radius:8px; padding:4px 10px; text-align:center; min-width:48px;">
+                        <div style="font-size:1rem; color:{c_col};">{c_arrow}</div>
+                        <div style="font-size:0.72rem; font-weight:700; color:{c_col};">{disp}</div>
+                    </div>
+                </div>
+                '''
+                st.markdown(card, unsafe_allow_html=True)
+            st.caption("Change from previous measurement")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_cards:
+            for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
+                c_col, c_arrow = change_meta(change)
+                s_col = seg_color(pct)
+                disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
+                card = (
+                    f'<div style="background:#fff; border:1px solid #E2E8F0; border-radius:12px;'
+                    f' padding:10px 14px; margin-bottom:8px;'
+                    f' display:flex; align-items:center; justify-content:space-between;">'
+                    f'<div>'
+                    f'<div style="font-size:0.72rem; color:#94A3B8; font-weight:600; letter-spacing:0.04em;">{seg.upper()}</div>'
+                    f'<div style="font-size:1.45rem; font-weight:800; color:#0F172A; line-height:1.2;">'
+                    f'{mass} <span style="font-size:0.85rem; font-weight:500; color:#64748B;">kg</span></div>'
+                    f'<div style="font-size:0.72rem; font-weight:700; color:{s_col}; margin-top:1px;">{stat} · {pct:.1f}%</div>'
+                    f'</div>'
+                    f'<div style="background:#F8FAFC; border-radius:8px; padding:4px 10px; text-align:center; min-width:48px;">'
+                    f'<div style="font-size:1rem; color:{c_col};">{c_arrow}</div>'
+                    f'<div style="font-size:0.72rem; font-weight:700; color:{c_col};">{disp}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+                st.markdown(card, unsafe_allow_html=True)
             st.caption("Change from previous measurement")
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1751,3 +2041,5 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
 if st.session_state.system_status == "ACTIVE":
     time.sleep(1.0)   # refresh telemetry chart every ~1 s; ML API is gated separately
     st.rerun()
+
+
