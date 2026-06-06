@@ -1545,38 +1545,48 @@ if user_role == "Doctor":
         changes  = ["0.00",     "-0.1",   "0.00",       "+0.04",    "+0.05"   ]
 
                 # Radar chart (pentagon) with anatomical orientation
+                # Radar chart with anatomical orientation (top = Trunk)
         import plotly.graph_objects as go
 
-        # Define custom angular positions (in degrees) for each segment
-        # 0° = right; 90° = top; 180° = left; 270° = bottom
+        # Define angular positions (degrees) relative to top (0° = top, clockwise)
+        # Clockwise order: Trunk (top), Right Arm (top right), Right Leg (bottom right), Left Leg (bottom left), Left Arm (top left)
         angles = {
-            "Right Arm": 30,      # top right
-            "Trunk":     90,      # top center
-            "Left Arm":  150,     # top left
-            "Left Leg":  210,     # bottom left
-            "Right Leg": 330      # bottom right (or  -30°)
+            "Trunk":      0,     # top
+            "Right Arm":  72,    # top right
+            "Right Leg":  144,   # bottom right
+            "Left Leg":   216,   # bottom left
+            "Left Arm":   288    # top left
         }
 
-        # Order the data to match the angular positions around the circle
-        ordered_segments = ["Right Arm", "Trunk", "Left Arm", "Left Leg", "Right Leg"]
+        # Order the data to go clockwise from top
+        ordered_segments = ["Trunk", "Right Arm", "Right Leg", "Left Leg", "Left Arm"]
         ordered_pcts = [
-            pcts[segments.index("Right Arm")],
             pcts[segments.index("Trunk")],
-            pcts[segments.index("Left Arm")],
+            pcts[segments.index("Right Arm")],
+            pcts[segments.index("Right Leg")],
             pcts[segments.index("Left Leg")],
-            pcts[segments.index("Right Leg")]
+            pcts[segments.index("Left Arm")]
         ]
 
-        # Convert percentages to list in the same order
         fig_radar = go.Figure()
         fig_radar.add_trace(go.Scatterpolar(
             r=ordered_pcts,
             theta=[angles[seg] for seg in ordered_segments],
-            thetaunit="degrees",          # use degrees instead of category names
+            thetaunit="degrees",
             fill='toself',
             marker=dict(color='#2A9D8F', size=5),
             line=dict(color='#2A9D8F', width=2),
             name='% of ideal'
+        ))
+        # Add reference 90% line
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[90]*5,
+            theta=[angles[seg] for seg in ordered_segments],
+            thetaunit="degrees",
+            fill='none',
+            line=dict(color='rgba(46,125,50,0.3)', width=1.5, dash='dash'),
+            name='Ideal (90%)',
+            showlegend=False
         ))
         fig_radar.update_layout(
             polar=dict(
@@ -1591,7 +1601,7 @@ if user_role == "Doctor":
                     tickvals=[angles[seg] for seg in ordered_segments],
                     ticktext=ordered_segments,
                     tickfont=dict(size=10, weight='bold'),
-                    rotation=0,            # keep 0° at right; we set explicit angles
+                    rotation=0,          # 0° is now at top (because we set 0° to Trunk)
                     direction='clockwise'
                 )
             ),
@@ -1601,23 +1611,13 @@ if user_role == "Doctor":
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
-        # Optional: add a faint 90% reference circle (as a separate trace)
-        fig_radar.add_trace(go.Scatterpolar(
-            r=[90]*5,
-            theta=[angles[seg] for seg in ordered_segments],
-            thetaunit="degrees",
-            fill='none',
-            line=dict(color='rgba(46,125,50,0.3)', width=1.5, dash='dash'),
-            name='Ideal (90%)',
-            showlegend=False
-        ))
 
         col_fig, col_cards = st.columns([1, 1], gap="large")
 
         with col_fig:
             st.plotly_chart(fig_radar, use_container_width=True)
             st.caption("Radar chart: distance from centre = % of ideal muscle mass.\nDashed line = 90% threshold.")
-
+            
         with col_cards:
             # (keep the existing metric cards exactly as before)
             def change_meta(c):
