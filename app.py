@@ -1316,7 +1316,6 @@ if user_role == "Doctor":
         _statuses   = ["Under", "Under", "Under", "Normal", "Normal"]
         _masses     = [1.13, 13.3, 1.21, 5.11, 5.13]
         _changes    = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-        _icons      = ["💪", "🎯", "💪", "🦵", "🦵"]
 
         def _seg_color(p):
             return "#EF5350" if p < 90 else "#2A9D8F"
@@ -1885,8 +1884,9 @@ else:
             {"🔴 High — suggest rest" if fatigue >= 7 else "🟡 Moderate — monitor" if fatigue >= 5 else "🟢 Acceptable"}
         </div>""", unsafe_allow_html=True)
 
+    st.divider()
     # ── Muscle health summary ───────────────────────────────────────────
-    st.markdown("### 💪 Muscle Health by Segment")
+    st.markdown("### Muscle Health by Segment")
     _cg_segs  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
     _cg_pcts  = [65.3, 84.8, 69.8, 93.4, 93.9]
     _cg_mass  = [1.13, 13.3, 1.21, 5.11, 5.13]
