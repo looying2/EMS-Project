@@ -1454,9 +1454,10 @@ if user_role == "Doctor":
         st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Session Audit Trail
+                # Session Audit Trail – improved readability
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
+        st.caption("All events recorded during patient sessions, colour‑coded by type.")
 
         df_logs = read_logs(patient_id)
 
@@ -1467,36 +1468,47 @@ if user_role == "Doctor":
             total_sessions = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
             total_stops    = df_logs[df_logs['event'].isin(['SESSION_STOP', 'EMERGENCY_STOP'])].shape[0]
             param_changes  = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
-            last_event_ts  = df_logs['ts'].iloc[0] if not df_logs.empty else "—"
+            last_event_ts  = df_logs['ts'].iloc[0][:16] if not df_logs.empty else "—"
 
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("🏃 Sessions Started", total_sessions)
             s2.metric("⏹ Sessions Stopped", total_stops)
-            s3.metric("⚡ Param Changes",    param_changes)
-            s4.metric("🕐 Last Event",       last_event_ts[:16] if last_event_ts != "—" else "—")
+            s3.metric("⚡ Parameter Changes", param_changes)
+            s4.metric("🕐 Last Event", last_event_ts)
+
+            # ── Legend expander (colour explanation) ───────────────────────
+            with st.expander("🎨 What do the colours mean?"):
+                st.markdown("""
+                - 🟢 **Green (SESSION_START)** – Therapy session began
+                - 🟠 **Orange (SESSION_STOP)** – Session ended normally
+                - 🔵 **Blue (SESSION_PAUSE)** – Session paused by user
+                - 🔴 **Red (EMERGENCY_STOP)** – Emergency stop triggered
+                - 🟣 **Purple (PARAM_CHANGE)** – Stimulation intensity changed
+                - 🔷 **Teal (INBODY_OCR_UPLOAD)** – InBody scan uploaded
+                """)
 
             st.divider()
 
-            # ── Filter controls ────────────────────────────────────────────
-            all_events = ["All"] + sorted(df_logs['event'].unique().tolist())
-            fc1, fc2 = st.columns([1, 2])
-            with fc1:
-                evt_filter = st.selectbox("Filter by event", all_events, key="audit_evt_filter")
-            with fc2:
-                search_term = st.text_input("Search details", placeholder="e.g. intensity, protocol…", key="audit_search")
+            # ── Filters (collapsible, hidden by default) ───────────────────
+            with st.expander("🔍 Filter events", expanded=False):
+                fc1, fc2 = st.columns([1, 2])
+                all_events = ["All"] + sorted(df_logs['event'].unique().tolist())
+                with fc1:
+                    evt_filter = st.selectbox("Event type", all_events, key="audit_evt_filter")
+                with fc2:
+                    search_term = st.text_input("Search in details", placeholder="e.g. intensity, protocol…", key="audit_search")
 
-            filtered = df_logs.copy()
-            if evt_filter != "All":
-                filtered = filtered[filtered['event'] == evt_filter]
-            if search_term:
-                filtered = filtered[
-                    filtered['details'].str.contains(search_term, case=False, na=False) |
-                    filtered['event'].str.contains(search_term, case=False, na=False)
-                ]
+                filtered = df_logs.copy()
+                if evt_filter != "All":
+                    filtered = filtered[filtered['event'] == evt_filter]
+                if search_term:
+                    filtered = filtered[
+                        filtered['details'].str.contains(search_term, case=False, na=False) |
+                        filtered['event'].str.contains(search_term, case=False, na=False)
+                    ]
+                st.caption(f"Showing **{len(filtered)}** of **{len(df_logs)}** events")
 
-            st.caption(f"Showing {len(filtered)} of {len(df_logs)} events")
-
-            # ── Event colour map ───────────────────────────────────────────
+            # ── Render events as large, clear cards ────────────────────────
             event_styles = {
                 "SESSION_START":    ("#E8F5E9", "#2E7D32", "▶"),
                 "SESSION_STOP":     ("#FFF8E1", "#F57C00", "⏹"),
@@ -1507,27 +1519,28 @@ if user_role == "Doctor":
             }
             default_style = ("#F8FAFC", "#475569", "•")
 
-            # ── Render rows ────────────────────────────────────────────────
-            for _, row in filtered.iterrows():
+            for _, row in (filtered if 'filtered' in locals() else df_logs).iterrows():
                 bg, tc, icon = event_styles.get(row['event'], default_style)
                 details_text = row['details'] if row['details'] else "—"
-                ts_str = str(row['ts'])[:19].replace("T", "  ")
+                # Format timestamp to readable string
+                ts_str = row['ts'][:19].replace("T", "  ") if isinstance(row['ts'], str) else str(row['ts'])[:19]
                 st.markdown(
-                    f'<div style="background:{bg};border-radius:10px;padding:10px 14px;'
-                    f'margin-bottom:6px;display:flex;align-items:flex-start;gap:12px;">'
-                    f'<div style="font-size:1.1rem;padding-top:1px;">{icon}</div>'
+                    f'<div style="background:{bg};border-radius:12px;padding:14px 18px;'
+                    f'margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;">'
+                    f'<div style="font-size:1.3rem;padding-top:2px;">{icon}</div>'
                     f'<div style="flex:1;">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                    f'<span style="font-size:0.82rem;font-weight:700;color:{tc};">{row["event"]}</span>'
-                    f'<span style="font-size:0.75rem;color:#94A3B8;">{ts_str}</span>'
+                    f'<span style="font-size:0.9rem;font-weight:800;color:{tc};letter-spacing:0.02em;">{row["event"]}</span>'
+                    f'<span style="font-size:0.8rem;color:#94A3B8;">{ts_str}</span>'
                     f'</div>'
-                    f'<div style="font-size:0.78rem;color:#475569;margin-top:2px;">{details_text}</div>'
+                    f'<div style="font-size:0.9rem;color:#334155;margin-top:4px;">{details_text}</div>'
                     f'</div></div>',
                     unsafe_allow_html=True
                 )
 
             st.divider()
 
+        # ── Download button ────────────────────────────────────────────────
         csv = df_logs.to_csv(index=False).encode("utf-8")
         st.download_button(
             "⬇️ Download Full Audit Trail (CSV)",
@@ -1536,13 +1549,6 @@ if user_role == "Doctor":
             "text/csv",
             use_container_width=True
         )
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # Export Report
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📄 Export Report")
-        report_text = generate_report(patient_id, muscle_mass_df, pain_score_progress, fatigue_progress)
-        st.download_button(label="📄 Download Progress Report (TXT)", data=report_text, file_name=f"Report_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt", mime="text/plain", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- TAB 5: CLINICAL AI CHAT (improved layout) ----------
