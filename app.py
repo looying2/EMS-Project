@@ -1397,7 +1397,7 @@ if user_role == "Doctor":
 
         with _col_cards:
             st.markdown("#### Soft Lean Mass (kg)")
-            for _seg, _mass, _chg, _pct, _stat, _icon in zip(_seg_names, _masses, _changes, _pcts, _statuses):
+            for _seg, _mass, _chg, _pct, _stat in zip(_seg_names, _masses, _changes, _pcts, _statuses):
                 _cc, _arr = _change_meta(_chg)
                 _sc = _seg_color(_pct)
                 _disp = _chg if _chg.startswith("-") else (f"+{_chg}" if _chg != "0.00" else "0.0")
@@ -1406,7 +1406,6 @@ if user_role == "Doctor":
                     f'<div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;'
                     f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
                     f'<div style="display:flex;align-items:center;gap:9px;">'
-                    f'<span style="font-size:1.2rem;">{_icon}</span>'
                     f'<div>'
                     f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{_seg}</div>'
                     f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{_mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
