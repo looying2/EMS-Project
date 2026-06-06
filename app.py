@@ -1533,9 +1533,9 @@ if user_role == "Doctor":
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis
+        # Segmental Lean Mass Analysis 
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("Segmental Lean Mass Analysis")
+        st.subheader("💪 Segmental Lean Mass Analysis")
         st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
 
         segments = ["Left Arm", "Trunk",  "Right Arm", "Left Leg", "Right Leg"]
@@ -1546,121 +1546,106 @@ if user_role == "Doctor":
 
         def seg_color(p):
             return "#EF5350" if p < 90 else "#2A9D8F"
+
         def change_meta(c):
-            if c.startswith("-"):    return "#DC2626", "#FEE2E2", "↓"
-            elif c in ("0.00","0"):  return "#94A3B8", "#F1F5F9", "→"
-            else:                    return "#16A34A", "#DCFCE7", "↑"
+            if c.startswith("-"):      return "#DC2626", "↓"
+            elif c in ("0.00", "0"):   return "#94A3B8", "→"
+            else:                      return "#16A34A", "↑"
 
-        la_c=seg_color(pcts[0]); tr_c=seg_color(pcts[1]); ra_c=seg_color(pcts[2])
-        ll_c=seg_color(pcts[3]); rl_c=seg_color(pcts[4])
-
-        # Clean flat silhouette using a single realistic body outline path
-        # viewBox 0 0 340 480, body centered around x=170
-        body_svg = (
-            f'<svg viewBox="0 0 340 480" width="220" xmlns="http://www.w3.org/2000/svg">'
-            f'<defs>'
-            f'<clipPath id="torso_clip">'
-            f'<path d="M138,74 C128,78 118,88 115,100 L110,145 L110,200 L230,200 L230,145 L225,100 C222,88 212,78 202,74 Z"/>'
-            f'</clipPath>'
-            f'<clipPath id="larm_clip">'
-            f'<path d="M108,78 C98,82 90,96 88,114 L86,160 C86,170 91,176 100,177 L113,177 C120,174 122,166 121,157 L120,112 C119,96 115,84 108,78 Z"/>'
-            f'</clipPath>'
-            f'<clipPath id="rarm_clip">'
-            f'<path d="M232,78 C242,82 250,96 252,114 L254,160 C254,170 249,176 240,177 L227,177 C220,174 218,166 219,157 L220,112 C221,96 225,84 232,78 Z"/>'
-            f'</clipPath>'
-            f'<clipPath id="lleg_clip">'
-            f'<path d="M112,208 L112,370 L160,370 L160,208 Z"/>'
-            f'</clipPath>'
-            f'<clipPath id="rleg_clip">'
-            f'<path d="M180,208 L180,370 L228,370 L228,208 Z"/>'
-            f'</clipPath>'
-            f'</defs>'
-
-            # full body silhouette path (flat, smooth, realistic)
-            f'<path d="'
-            f'M170,8 C157,8 147,18 147,32 C147,46 157,56 170,56 C183,56 193,46 193,32 C193,18 183,8 170,8 Z'
-            f'M155,56 C144,60 133,72 130,86 L124,116 L118,148 L108,150 C96,153 88,162 87,175 L87,230 C87,240 93,246 103,246 L113,244 L113,204 L116,204 L116,248 L116,364 C116,376 122,384 133,386 L138,386 C148,382 152,374 152,362 L152,284 L158,284 L158,362 C158,374 162,382 172,386 L178,386 C188,382 192,374 192,362 L192,284 L198,284 L198,362 C198,374 202,382 212,386 L217,386 C228,382 232,374 232,362 L232,248 L232,204 L235,204 L235,244 L245,246 C255,246 261,240 261,230 L261,175 C260,162 252,153 240,150 L230,148 L224,116 L218,86 C215,72 204,60 193,56 Z'
-            f'" fill="#C5D9E8" stroke="#9BB5CC" stroke-width="1" fill-rule="evenodd"/>'
-
-            # torso color overlay
-            f'<rect x="115" y="74" width="110" height="126" fill="{tr_c}" fill-opacity="0.45" clip-path="url(#torso_clip)"/>'
-
-            # left arm color overlay
-            f'<rect x="82" y="74" width="44" height="108" fill="{la_c}" fill-opacity="0.5" clip-path="url(#larm_clip)"/>'
-
-            # right arm color overlay
-            f'<rect x="214" y="74" width="44" height="108" fill="{ra_c}" fill-opacity="0.5" clip-path="url(#rarm_clip)"/>'
-
-            # left leg color overlay
-            f'<rect x="109" y="200" width="54" height="174" fill="{ll_c}" fill-opacity="0.45" clip-path="url(#lleg_clip)"/>'
-
-            # right leg color overlay
-            f'<rect x="177" y="200" width="54" height="174" fill="{rl_c}" fill-opacity="0.45" clip-path="url(#rleg_clip)"/>'
-
-            # L / R labels
-            f'<text x="128" y="70" text-anchor="middle" font-size="12" font-weight="500" fill="#64748B" font-family="sans-serif">L</text>'
-            f'<text x="212" y="70" text-anchor="middle" font-size="12" font-weight="500" fill="#64748B" font-family="sans-serif">R</text>'
-
-            # dot + dashed line: left arm → left
-            f'<circle cx="97" cy="120" r="3.5" fill="{la_c}"/>'
-            f'<line x1="93" y1="120" x2="46" y2="120" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
-            f'<text x="42" y="115" text-anchor="end" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[0]} kg</text>'
-            f'<text x="42" y="128" text-anchor="end" font-size="11" fill="{la_c}" font-family="sans-serif">{statuses[0]} {pcts[0]:.0f}%</text>'
-
-            # dot + dashed line: trunk → right
-            f'<circle cx="225" cy="138" r="3.5" fill="{tr_c}"/>'
-            f'<line x1="229" y1="138" x2="278" y2="138" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
-            f'<text x="282" y="133" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[1]} kg</text>'
-            f'<text x="282" y="146" text-anchor="start" font-size="11" fill="{tr_c}" font-family="sans-serif">{statuses[1]} {pcts[1]:.0f}%</text>'
-
-            # dot + dashed line: right arm → right
-            f'<circle cx="243" cy="115" r="3.5" fill="{ra_c}"/>'
-            f'<line x1="247" y1="115" x2="278" y2="115" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
-            f'<text x="282" y="110" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[2]} kg</text>'
-            f'<text x="282" y="123" text-anchor="start" font-size="11" fill="{ra_c}" font-family="sans-serif">{statuses[2]} {pcts[2]:.0f}%</text>'
-
-            # dot + dashed line: left leg → left
-            f'<circle cx="131" cy="295" r="3.5" fill="{ll_c}"/>'
-            f'<line x1="127" y1="295" x2="46" y2="295" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
-            f'<text x="42" y="290" text-anchor="end" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[3]} kg</text>'
-            f'<text x="42" y="303" text-anchor="end" font-size="11" fill="{ll_c}" font-family="sans-serif">{statuses[3]} {pcts[3]:.0f}%</text>'
-
-            # dot + dashed line: right leg → right
-            f'<circle cx="209" cy="295" r="3.5" fill="{rl_c}"/>'
-            f'<line x1="213" y1="295" x2="278" y2="295" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3"/>'
-            f'<text x="282" y="290" text-anchor="start" font-size="13" font-weight="600" fill="#1E293B" font-family="sans-serif">{masses[4]} kg</text>'
-            f'<text x="282" y="303" text-anchor="start" font-size="11" fill="{rl_c}" font-family="sans-serif">{statuses[4]} {pcts[4]:.0f}%</text>'
-
-            f'</svg>'
-        )
+        la_c = seg_color(pcts[0]); tr_c = seg_color(pcts[1])
+        ra_c = seg_color(pcts[2]); ll_c = seg_color(pcts[3]); rl_c = seg_color(pcts[4])
 
         col_fig, col_cards = st.columns([1, 1], gap="large")
+
         with col_fig:
-            st.markdown(
-                f'<div style="display:flex;justify-content:center;align-items:center;padding:8px 0;">{body_svg}</div>',
-                unsafe_allow_html=True
+            body_svg = (
+                f'<svg viewBox="0 0 100 200" width="110" xmlns="http://www.w3.org/2000/svg">'
+                f'<circle cx="50" cy="18" r="13" fill="#B0BEC5"/>'
+                f'<rect x="30" y="32" width="40" height="55" rx="8" fill="{tr_c}" opacity="0.75"/>'
+                f'<rect x="12" y="34" width="16" height="48" rx="7" fill="{la_c}" opacity="0.75"/>'
+                f'<rect x="72" y="34" width="16" height="48" rx="7" fill="{ra_c}" opacity="0.75"/>'
+                f'<rect x="27" y="90" width="18" height="70" rx="7" fill="{ll_c}" opacity="0.75"/>'
+                f'<rect x="55" y="90" width="18" height="70" rx="7" fill="{rl_c}" opacity="0.75"/>'
+                f'</svg>'
             )
+
+            label_style = "font-size:0.78rem; color:#546E7A;"
+            status_bold = "font-size:0.75rem; font-weight:700;"
+            seg_bold    = "font-size:0.82rem; font-weight:600; color:#1E293B;"
+
+            trunk_label = (
+                f'<div style="text-align:center; margin-bottom:4px;">'
+                f'<span style="{label_style}">{pcts[1]:.1f}%</span><br>'
+                f'<span style="{status_bold} color:{tr_c};">{statuses[1]}</span><br>'
+                f'<span style="{seg_bold}">Trunk</span>'
+                f'</div>'
+            )
+            la_label = (
+                f'<div style="text-align:center; width:28%;">'
+                f'<span style="{label_style}">{pcts[0]:.1f}%</span><br>'
+                f'<span style="{status_bold} color:{la_c};">{statuses[0]}</span><br>'
+                f'<span style="{seg_bold}">Left Arm</span>'
+                f'</div>'
+            )
+            ra_label = (
+                f'<div style="text-align:center; width:28%;">'
+                f'<span style="{label_style}">{pcts[2]:.1f}%</span><br>'
+                f'<span style="{status_bold} color:{ra_c};">{statuses[2]}</span><br>'
+                f'<span style="{seg_bold}">Right Arm</span>'
+                f'</div>'
+            )
+            ll_label = (
+                f'<div style="text-align:center; width:40%;">'
+                f'<span style="{label_style}">{pcts[3]:.1f}%</span><br>'
+                f'<span style="{status_bold} color:{ll_c};">{statuses[3]}</span><br>'
+                f'<span style="{seg_bold}">Left Leg</span>'
+                f'</div>'
+            )
+            rl_label = (
+                f'<div style="text-align:center; width:40%;">'
+                f'<span style="{label_style}">{pcts[4]:.1f}%</span><br>'
+                f'<span style="{status_bold} color:{rl_c};">{statuses[4]}</span><br>'
+                f'<span style="{seg_bold}">Right Leg</span>'
+                f'</div>'
+            )
+
+            html = (
+                f'<div style="position:relative; width:100%; padding-bottom:8px;">'
+                f'{trunk_label}'
+                f'<div style="display:flex; align-items:center; justify-content:space-between; margin:6px 0;">'
+                f'{la_label}'
+                f'<div style="width:44%; display:flex; justify-content:center;">{body_svg}</div>'
+                f'{ra_label}'
+                f'</div>'
+                f'<div style="display:flex; justify-content:space-around; margin-top:4px;">'
+                f'{ll_label}{rl_label}'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(html, unsafe_allow_html=True)
+
         with col_cards:
-            cards_html = '<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px;">'
             for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
-                cc, cbg, arr = change_meta(change)
-                sc = seg_color(pct)
+                c_col, c_arrow = change_meta(change)
+                s_col = seg_color(pct)
                 disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
-                cards_html += (
-                    f'<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;'
-                    f'padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">'
+                card = (
+                    f'<div style="background:#fff; border:1px solid #E2E8F0; border-radius:12px;'
+                    f' padding:10px 14px; margin-bottom:8px;'
+                    f' display:flex; align-items:center; justify-content:space-between;">'
                     f'<div>'
-                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:3px;">{seg}</div>'
-                    f'<div style="font-size:22px;font-weight:700;color:#0F172A;line-height:1.1;">{mass}<span style="font-size:13px;font-weight:400;color:#64748B;margin-left:3px;">kg</span></div>'
-                    f'<div style="font-size:12px;font-weight:600;color:{sc};margin-top:2px;">{stat} · {pct:.1f}%</div>'
+                    f'<div style="font-size:0.72rem; color:#94A3B8; font-weight:600; letter-spacing:0.04em;">{seg.upper()}</div>'
+                    f'<div style="font-size:1.45rem; font-weight:800; color:#0F172A; line-height:1.2;">'
+                    f'{mass} <span style="font-size:0.85rem; font-weight:500; color:#64748B;">kg</span></div>'
+                    f'<div style="font-size:0.72rem; font-weight:700; color:{s_col}; margin-top:1px;">{stat} · {pct:.1f}%</div>'
                     f'</div>'
-                    f'<div style="background:{cbg};border-radius:8px;padding:6px 12px;text-align:center;min-width:52px;">'
-                    f'<div style="font-size:16px;color:{cc};">{arr}</div>'
-                    f'<div style="font-size:12px;font-weight:600;color:{cc};">{disp}</div>'
-                    f'</div></div>'
+                    f'<div style="background:#F8FAFC; border-radius:8px; padding:4px 10px; text-align:center; min-width:48px;">'
+                    f'<div style="font-size:1rem; color:{c_col};">{c_arrow}</div>'
+                    f'<div style="font-size:0.72rem; font-weight:700; color:{c_col};">{disp}</div>'
+                    f'</div>'
+                    f'</div>'
                 )
-            cards_html += '</div>'
-            st.markdown(cards_html, unsafe_allow_html=True)
+                st.markdown(card, unsafe_allow_html=True)
             st.caption("Change from previous measurement")
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2055,3 +2040,5 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
 if st.session_state.system_status == "ACTIVE":
     time.sleep(1.0)   # refresh telemetry chart every ~1 s; ML API is gated separately
     st.rerun()
+
+
