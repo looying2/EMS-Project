@@ -1454,101 +1454,155 @@ if user_role == "Doctor":
         st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
         st.markdown('</div>', unsafe_allow_html=True)
 
-                # Session Audit Trail – improved readability
+        # Session Audit Trail
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
-        st.caption("All events recorded during patient sessions, colour‑coded by type.")
 
         df_logs = read_logs(patient_id)
 
         if df_logs.empty:
-            st.info("No audit events recorded for this patient yet.")
+            st.markdown("""
+            <div style="text-align:center;padding:40px 0;color:#94A3B8;">
+                <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+                <div style="font-size:0.95rem;font-weight:600;color:#64748B;">No audit events recorded for this patient.</div>
+                <div style="font-size:0.8rem;margin-top:4px;">Events will appear here once a session is started.</div>
+            </div>""", unsafe_allow_html=True)
         else:
-            # ── Summary stats ──────────────────────────────────────────────
-            total_sessions = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
-            total_stops    = df_logs[df_logs['event'].isin(['SESSION_STOP', 'EMERGENCY_STOP'])].shape[0]
-            param_changes  = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
-            last_event_ts  = df_logs['ts'].iloc[0][:16] if not df_logs.empty else "—"
+            # ── Clinical summary bar ───────────────────────────────────────
+            total_sessions  = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
+            total_stops     = df_logs[df_logs['event'] == 'SESSION_STOP'].shape[0]
+            emergency_stops = df_logs[df_logs['event'] == 'EMERGENCY_STOP'].shape[0]
+            param_changes   = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
+            last_ts         = str(df_logs['ts'].iloc[0])[:16].replace("T", " ")
 
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("🏃 Sessions Started", total_sessions)
-            s2.metric("⏹ Sessions Stopped", total_stops)
-            s3.metric("⚡ Parameter Changes", param_changes)
-            s4.metric("🕐 Last Event", last_event_ts)
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;">
+                <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#15803D;">{total_sessions}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#166534;letter-spacing:0.04em;margin-top:2px;">SESSIONS STARTED</div>
+                </div>
+                <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#B45309;">{total_stops}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#92400E;letter-spacing:0.04em;margin-top:2px;">SESSIONS STOPPED</div>
+                </div>
+                <div style="background:{"#FEF2F2" if emergency_stops > 0 else "#F8FAFC"};border:1px solid {"#FECACA" if emergency_stops > 0 else "#E2E8F0"};border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:{"#DC2626" if emergency_stops > 0 else "#94A3B8"};">{emergency_stops}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:{"#991B1B" if emergency_stops > 0 else "#64748B"};letter-spacing:0.04em;margin-top:2px;">EMERGENCY STOPS</div>
+                </div>
+                <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#6D28D9;">{param_changes}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#5B21B6;letter-spacing:0.04em;margin-top:2px;">PARAM ADJUSTMENTS</div>
+                </div>
+                <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:0.82rem;font-weight:700;color:#0369A1;">{last_ts}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#075985;letter-spacing:0.04em;margin-top:2px;">LAST EVENT</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            # ── Legend expander (colour explanation) ───────────────────────
-            with st.expander("🎨 What do the colours mean?"):
-                st.markdown("""
-                - 🟢 **Green (SESSION_START)** – Therapy session began
-                - 🟠 **Orange (SESSION_STOP)** – Session ended normally
-                - 🔵 **Blue (SESSION_PAUSE)** – Session paused by user
-                - 🔴 **Red (EMERGENCY_STOP)** – Emergency stop triggered
-                - 🟣 **Purple (PARAM_CHANGE)** – Stimulation intensity changed
-                - 🔷 **Teal (INBODY_OCR_UPLOAD)** – InBody scan uploaded
-                """)
+            # ── Filter bar ─────────────────────────────────────────────────
+            fc1, fc2, fc3 = st.columns([1.2, 2, 0.8])
+            all_events = ["All Events"] + sorted(df_logs['event'].unique().tolist())
+            with fc1:
+                evt_filter = st.selectbox("Event Type", all_events, key="audit_evt_filter", label_visibility="collapsed")
+            with fc2:
+                search_term = st.text_input("Search", placeholder="🔍  Search by event or details…", key="audit_search", label_visibility="collapsed")
+            with fc3:
+                show_n = st.selectbox("Show", [20, 50, 100, 200], key="audit_show_n", label_visibility="collapsed")
 
-            st.divider()
+            filtered = df_logs.copy()
+            if evt_filter != "All Events":
+                filtered = filtered[filtered['event'] == evt_filter]
+            if search_term:
+                filtered = filtered[
+                    filtered['details'].str.contains(search_term, case=False, na=False) |
+                    filtered['event'].str.contains(search_term, case=False, na=False)
+                ]
+            filtered = filtered.head(show_n)
 
-            # ── Filters (collapsible, hidden by default) ───────────────────
-            with st.expander("🔍 Filter events", expanded=False):
-                fc1, fc2 = st.columns([1, 2])
-                all_events = ["All"] + sorted(df_logs['event'].unique().tolist())
-                with fc1:
-                    evt_filter = st.selectbox("Event type", all_events, key="audit_evt_filter")
-                with fc2:
-                    search_term = st.text_input("Search in details", placeholder="e.g. intensity, protocol…", key="audit_search")
+            # ── Table header ───────────────────────────────────────────────
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:160px 180px 1fr;gap:0;
+                        background:#F1F5F9;border:1px solid #E2E8F0;
+                        border-radius:8px 8px 0 0;padding:8px 14px;margin-top:8px;">
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DATE / TIME</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">EVENT</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DETAILS</span>
+            </div>""", unsafe_allow_html=True)
 
-                filtered = df_logs.copy()
-                if evt_filter != "All":
-                    filtered = filtered[filtered['event'] == evt_filter]
-                if search_term:
-                    filtered = filtered[
-                        filtered['details'].str.contains(search_term, case=False, na=False) |
-                        filtered['event'].str.contains(search_term, case=False, na=False)
-                    ]
-                st.caption(f"Showing **{len(filtered)}** of **{len(df_logs)}** events")
-
-            # ── Render events as large, clear cards ────────────────────────
-            event_styles = {
-                "SESSION_START":    ("#E8F5E9", "#2E7D32", "▶"),
-                "SESSION_STOP":     ("#FFF8E1", "#F57C00", "⏹"),
-                "SESSION_PAUSE":    ("#E3F2FD", "#1565C0", "⏸"),
-                "EMERGENCY_STOP":   ("#FFEBEE", "#C62828", "🚨"),
-                "PARAM_CHANGE":     ("#F3E5F5", "#6A1B9A", "⚡"),
-                "INBODY_OCR_UPLOAD":("#E0F7FA", "#00695C", "📄"),
+            # ── Event config ───────────────────────────────────────────────
+            _ecfg = {
+                "SESSION_START":     ("#DCFCE7", "#15803D", "#F0FDF4", "Session Started"),
+                "SESSION_STOP":      ("#FEF9C3", "#92400E", "#FFFBEB", "Session Stopped"),
+                "SESSION_PAUSE":     ("#DBEAFE", "#1D4ED8", "#EFF6FF", "Session Paused"),
+                "EMERGENCY_STOP":    ("#FEE2E2", "#991B1B", "#FFF5F5", "⚠ Emergency Stop"),
+                "PARAM_CHANGE":      ("#EDE9FE", "#5B21B6", "#F5F3FF", "Parameter Adjusted"),
+                "INBODY_OCR_UPLOAD": ("#CFFAFE", "#0E7490", "#F0FDFF", "InBody Scan Uploaded"),
             }
-            default_style = ("#F8FAFC", "#475569", "•")
+            _default_cfg = ("#E2E8F0", "#475569", "#F8FAFC", "System Event")
 
-            for _, row in (filtered if 'filtered' in locals() else df_logs).iterrows():
-                bg, tc, icon = event_styles.get(row['event'], default_style)
-                details_text = row['details'] if row['details'] else "—"
-                # Format timestamp to readable string
-                ts_str = row['ts'][:19].replace("T", "  ") if isinstance(row['ts'], str) else str(row['ts'])[:19]
-                st.markdown(
-                    f'<div style="background:{bg};border-radius:12px;padding:14px 18px;'
-                    f'margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;">'
-                    f'<div style="font-size:1.3rem;padding-top:2px;">{icon}</div>'
-                    f'<div style="flex:1;">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                    f'<span style="font-size:0.9rem;font-weight:800;color:{tc};letter-spacing:0.02em;">{row["event"]}</span>'
-                    f'<span style="font-size:0.8rem;color:#94A3B8;">{ts_str}</span>'
+            rows_html = ""
+            for i, (_, row) in enumerate(filtered.iterrows()):
+                dot_c, text_c, bg_c, label = _ecfg.get(row['event'], _default_cfg)
+                details_text = str(row['details']) if row['details'] else "—"
+                ts_raw = str(row['ts'])[:19]
+                date_part = ts_raw[:10]
+                time_part = ts_raw[11:19] if len(ts_raw) > 10 else ""
+                border_top = "1px solid #E2E8F0" if i > 0 else "none"
+                radius = "0 0 8px 8px" if i == len(filtered) - 1 else "0"
+                rows_html += (
+                    f'<div style="display:grid;grid-template-columns:160px 180px 1fr;gap:0;'
+                    f'background:{bg_c};border-left:1px solid #E2E8F0;border-right:1px solid #E2E8F0;'
+                    f'border-top:{border_top};border-bottom:1px solid #E2E8F0;'
+                    f'border-radius:{radius};padding:9px 14px;align-items:center;">'
+                    f'<div>'
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#1E293B;font-family:monospace;">{date_part}</div>'
+                    f'<div style="font-size:0.72rem;color:#94A3B8;font-family:monospace;">{time_part}</div>'
                     f'</div>'
-                    f'<div style="font-size:0.9rem;color:#334155;margin-top:4px;">{details_text}</div>'
-                    f'</div></div>',
-                    unsafe_allow_html=True
+                    f'<div style="display:flex;align-items:center;gap:7px;">'
+                    f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot_c};border:1.5px solid {text_c};flex-shrink:0;"></span>'
+                    f'<span style="font-size:0.78rem;font-weight:600;color:{text_c};">{label}</span>'
+                    f'</div>'
+                    f'<div style="font-size:0.77rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{details_text}</div>'
+                    f'</div>'
                 )
+            st.markdown(rows_html, unsafe_allow_html=True)
+            st.caption(f"Showing {len(filtered)} of {len(df_logs)} total events · Patient: {patient_id}")
 
-            st.divider()
+        st.divider()
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            csv = df_logs.to_csv(index=False).encode("utf-8") if not df_logs.empty else b""
+            st.download_button(
+                "⬇️ Export Audit Trail (CSV)",
+                csv,
+                f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv",
+                use_container_width=True,
+                disabled=df_logs.empty
+            )
+        with col_dl2:
+            if not df_logs.empty:
+                audit_txt = f"CLINICAL AUDIT TRAIL\n{'='*50}\n"
+                audit_txt += f"Patient ID : {patient_id}\n"
+                audit_txt += f"Generated  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                audit_txt += f"{'='*50}\n\n"
+                for _, row in df_logs.iterrows():
+                    audit_txt += f"[{row['ts']}]  {row['event']:<22}  {row['details']}\n"
+                st.download_button(
+                    "📄 Export Formatted Report (TXT)",
+                    audit_txt.encode("utf-8"),
+                    f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    "text/plain",
+                    use_container_width=True
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── Download button ────────────────────────────────────────────────
-        csv = df_logs.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download Full Audit Trail (CSV)",
-            csv,
-            f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d')}.csv",
-            "text/csv",
-            use_container_width=True
-        )
+        # Export Report
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("📄 Export Report")
+        report_text = generate_report(patient_id, muscle_mass_df, pain_score_progress, fatigue_progress)
+        st.download_button(label="📄 Download Progress Report (TXT)", data=report_text, file_name=f"Report_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt", mime="text/plain", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- TAB 5: CLINICAL AI CHAT (improved layout) ----------
