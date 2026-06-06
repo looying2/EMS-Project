@@ -1389,54 +1389,10 @@ if user_role == "Doctor":
         _la = _seg_color(_pcts[0]); _tr = _seg_color(_pcts[1]); _ra = _seg_color(_pcts[2])
         _ll = _seg_color(_pcts[3]); _rl = _seg_color(_pcts[4])
 
-        _body_svg = (
-            '<svg viewBox="0 0 100 230" width="90" xmlns="http://www.w3.org/2000/svg">'
-
-            # ── Head ──────────────────────────────────────────────────────
-            + '<ellipse cx="50" cy="13" rx="10" ry="11" fill="#C8D8E8" stroke="#9BB5CC" stroke-width="0.6"/>'
-
-            # ── Neck ──────────────────────────────────────────────────────
-            + '<rect x="46" y="23" width="8" height="6" rx="2" fill="#C8D8E8"/>'
-
-            # ── Torso — tapered, rounded shoulders & waist ────────────────
-            + f'<path d="M32,29 C24,31 22,38 22,46 L22,74 C22,78 26,80 32,81 L44,82 L56,82 L68,81 C74,80 78,78 78,74 L78,46 C78,38 76,31 68,29 C64,27 58,26 50,26 C42,26 36,27 32,29 Z" fill="{_tr}" fill-opacity="0.8"/>'
-
-            # ── Left arm — upper + forearm rounded ────────────────────────
-            + f'<path d="M22,32 C16,34 13,40 13,48 L13,70 C13,75 16,78 21,78 L26,78 C30,77 32,74 32,69 L32,47 C32,39 29,34 25,32 Z" fill="{_la}" fill-opacity="0.8"/>'
-            + f'<path d="M14,72 C12,76 12,83 13,91 L14,103 C15,107 18,109 22,109 L25,109 C29,108 31,105 30,101 L29,89 C28,81 26,75 22,72 Z" fill="{_la}" fill-opacity="0.55"/>'
-
-            # ── Right arm — upper + forearm rounded ───────────────────────
-            + f'<path d="M78,32 C84,34 87,40 87,48 L87,70 C87,75 84,78 79,78 L74,78 C70,77 68,74 68,69 L68,47 C68,39 71,34 75,32 Z" fill="{_ra}" fill-opacity="0.8"/>'
-            + f'<path d="M86,72 C88,76 88,83 87,91 L86,103 C85,107 82,109 78,109 L75,109 C71,108 69,105 70,101 L71,89 C72,81 74,75 78,72 Z" fill="{_ra}" fill-opacity="0.55"/>'
-
-            # ── Pelvis / hip bridge ───────────────────────────────────────
-            + '<path d="M32,81 L68,81 C74,82 76,86 76,91 L75,98 C73,102 68,104 62,104 L38,104 C32,104 27,102 25,98 L24,91 C24,86 26,82 32,81 Z" fill="#A8C4D8" stroke="#9BB5CC" stroke-width="0.4"/>'
-
-            # ── Left thigh ────────────────────────────────────────────────
-            + f'<path d="M26,100 C22,105 21,114 21,124 L22,155 C23,161 27,164 33,164 L40,164 C45,163 47,159 47,153 L46,122 C45,112 42,104 37,100 Z" fill="{_ll}" fill-opacity="0.8"/>'
-            # ── Left shin ─────────────────────────────────────────────────
-            + f'<path d="M22,157 C20,163 20,172 21,183 L22,198 C23,203 27,206 32,206 L38,206 C43,205 45,201 44,196 L43,181 C42,170 40,162 35,157 Z" fill="{_ll}" fill-opacity="0.55"/>'
-            # ── Left foot ─────────────────────────────────────────────────
-            + f'<ellipse cx="33" cy="210" rx="12" ry="5" fill="{_ll}" fill-opacity="0.45"/>'
-
-            # ── Right thigh ───────────────────────────────────────────────
-            + f'<path d="M74,100 C78,105 79,114 79,124 L78,155 C77,161 73,164 67,164 L60,164 C55,163 53,159 53,153 L54,122 C55,112 58,104 63,100 Z" fill="{_rl}" fill-opacity="0.8"/>'
-            # ── Right shin ────────────────────────────────────────────────
-            + f'<path d="M78,157 C80,163 80,172 79,183 L78,198 C77,203 73,206 68,206 L62,206 C57,205 55,201 56,196 L57,181 C58,170 60,162 65,157 Z" fill="{_rl}" fill-opacity="0.55"/>'
-            # ── Right foot ────────────────────────────────────────────────
-            + f'<ellipse cx="67" cy="210" rx="12" ry="5" fill="{_rl}" fill-opacity="0.45"/>'
-
-            + '</svg>'
-        )
-
         _col_fig, _col_cards = st.columns([1, 1.05], gap="large")
 
         with _col_fig:
             st.plotly_chart(_fig_radar, use_container_width=True)
-            st.markdown(
-                f'<div style="display:flex;justify-content:center;margin-top:-12px;">{_body_svg}</div>',
-                unsafe_allow_html=True
-            )
             st.caption("Dashed ring = 90% ideal threshold")
 
         with _col_cards:
@@ -1501,10 +1457,85 @@ if user_role == "Doctor":
         # Session Audit Trail
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
+
         df_logs = read_logs(patient_id)
-        st.dataframe(df_logs, use_container_width=True, height=300)
+
+        if df_logs.empty:
+            st.info("No audit events recorded for this patient yet.")
+        else:
+            # ── Summary stats ──────────────────────────────────────────────
+            total_sessions = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
+            total_stops    = df_logs[df_logs['event'].isin(['SESSION_STOP', 'EMERGENCY_STOP'])].shape[0]
+            param_changes  = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
+            last_event_ts  = df_logs['ts'].iloc[0] if not df_logs.empty else "—"
+
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("🏃 Sessions Started", total_sessions)
+            s2.metric("⏹ Sessions Stopped", total_stops)
+            s3.metric("⚡ Param Changes",    param_changes)
+            s4.metric("🕐 Last Event",       last_event_ts[:16] if last_event_ts != "—" else "—")
+
+            st.divider()
+
+            # ── Filter controls ────────────────────────────────────────────
+            all_events = ["All"] + sorted(df_logs['event'].unique().tolist())
+            fc1, fc2 = st.columns([1, 2])
+            with fc1:
+                evt_filter = st.selectbox("Filter by event", all_events, key="audit_evt_filter")
+            with fc2:
+                search_term = st.text_input("Search details", placeholder="e.g. intensity, protocol…", key="audit_search")
+
+            filtered = df_logs.copy()
+            if evt_filter != "All":
+                filtered = filtered[filtered['event'] == evt_filter]
+            if search_term:
+                filtered = filtered[
+                    filtered['details'].str.contains(search_term, case=False, na=False) |
+                    filtered['event'].str.contains(search_term, case=False, na=False)
+                ]
+
+            st.caption(f"Showing {len(filtered)} of {len(df_logs)} events")
+
+            # ── Event colour map ───────────────────────────────────────────
+            event_styles = {
+                "SESSION_START":    ("#E8F5E9", "#2E7D32", "▶"),
+                "SESSION_STOP":     ("#FFF8E1", "#F57C00", "⏹"),
+                "SESSION_PAUSE":    ("#E3F2FD", "#1565C0", "⏸"),
+                "EMERGENCY_STOP":   ("#FFEBEE", "#C62828", "🚨"),
+                "PARAM_CHANGE":     ("#F3E5F5", "#6A1B9A", "⚡"),
+                "INBODY_OCR_UPLOAD":("#E0F7FA", "#00695C", "📄"),
+            }
+            default_style = ("#F8FAFC", "#475569", "•")
+
+            # ── Render rows ────────────────────────────────────────────────
+            for _, row in filtered.iterrows():
+                bg, tc, icon = event_styles.get(row['event'], default_style)
+                details_text = row['details'] if row['details'] else "—"
+                ts_str = str(row['ts'])[:19].replace("T", "  ")
+                st.markdown(
+                    f'<div style="background:{bg};border-radius:10px;padding:10px 14px;'
+                    f'margin-bottom:6px;display:flex;align-items:flex-start;gap:12px;">'
+                    f'<div style="font-size:1.1rem;padding-top:1px;">{icon}</div>'
+                    f'<div style="flex:1;">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                    f'<span style="font-size:0.82rem;font-weight:700;color:{tc};">{row["event"]}</span>'
+                    f'<span style="font-size:0.75rem;color:#94A3B8;">{ts_str}</span>'
+                    f'</div>'
+                    f'<div style="font-size:0.78rem;color:#475569;margin-top:2px;">{details_text}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True
+                )
+
+            st.divider()
+
         csv = df_logs.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Audit Trail in CSV", csv, f"audit_{patient_id}.csv", "text/csv")
+        st.download_button(
+            "⬇️ Download Full Audit Trail (CSV)",
+            csv,
+            f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+            use_container_width=True
+        )
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Export Report
