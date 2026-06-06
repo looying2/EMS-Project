@@ -1533,7 +1533,7 @@ if user_role == "Doctor":
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis 
+        # Segmental Lean Mass Analysis
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("💪 Segmental Lean Mass Analysis")
         st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
@@ -1544,109 +1544,93 @@ if user_role == "Doctor":
         masses   = [1.13,        13.3,     1.21,         5.11,       5.13      ]
         changes  = ["0.00",     "-0.1",   "0.00",       "+0.04",    "+0.05"   ]
 
-        def seg_color(p):
-            return "#EF5350" if p < 90 else "#2A9D8F"
-
+        def seg_fill(p):
+            return "#F09595" if p < 90 else "#5DCAA5"
+        def seg_text(p):
+            return "#791F1F" if p < 90 else "#085041"
+        def seg_badge_bg(p):
+            return "#FCEBEB" if p < 90 else "#E1F5EE"
         def change_meta(c):
-            if c.startswith("-"):      return "#DC2626", "↓"
-            elif c in ("0.00", "0"):   return "#94A3B8", "→"
-            else:                      return "#16A34A", "↑"
+            if c.startswith("-"):    return "#A32D2D", "#FCEBEB", "↓"
+            elif c in ("0.00","0"):  return "#5F5E5A", "#F1EFE8", "→"
+            else:                    return "#0F6E56", "#E1F5EE", "↑"
 
-        la_c = seg_color(pcts[0]); tr_c = seg_color(pcts[1])
-        ra_c = seg_color(pcts[2]); ll_c = seg_color(pcts[3]); rl_c = seg_color(pcts[4])
+        la_f=seg_fill(pcts[0]); tr_f=seg_fill(pcts[1]); ra_f=seg_fill(pcts[2])
+        ll_f=seg_fill(pcts[3]); rl_f=seg_fill(pcts[4])
 
-        col_fig, col_cards = st.columns([1, 1], gap="large")
+        body_svg = (
+            f'<svg viewBox="0 0 100 200" width="90" xmlns="http://www.w3.org/2000/svg">'
+            f'<circle cx="50" cy="16" r="12" fill="#B4B2A9"/>'
+            f'<rect x="31" y="30" width="38" height="52" rx="7" fill="{tr_f}"/>'
+            f'<rect x="13" y="32" width="15" height="46" rx="6" fill="{la_f}"/>'
+            f'<rect x="72" y="32" width="15" height="46" rx="6" fill="{ra_f}"/>'
+            f'<rect x="28" y="85" width="17" height="66" rx="6" fill="{ll_f}"/>'
+            f'<rect x="55" y="85" width="17" height="66" rx="6" fill="{rl_f}"/>'
+            f'</svg>'
+        )
 
+        def floatlabel(name, pct, stat, p):
+            tc = seg_text(p); bg = seg_badge_bg(p)
+            return (
+                f'<div style="text-align:center;">'
+                f'<div style="font-size:13px;font-weight:500;color:var(--color-text-primary);">{name}</div>'
+                f'<div style="display:inline-flex;align-items:center;gap:4px;margin-top:3px;'
+                f'background:{bg};border-radius:20px;padding:2px 8px;">'
+                f'<span style="font-size:12px;font-weight:500;color:{tc};">{stat}</span>'
+                f'<span style="font-size:11px;color:{tc};opacity:0.8;">{pct:.1f}%</span>'
+                f'</div></div>'
+            )
+
+        fig_html = (
+            f'<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0;">'
+            f'{floatlabel("Trunk", pcts[1], statuses[1], pcts[1])}'
+            f'<div style="display:flex;align-items:center;gap:16px;">'
+            f'{floatlabel("Left Arm", pcts[0], statuses[0], pcts[0])}'
+            f'<div style="padding:4px 0;">{body_svg}</div>'
+            f'{floatlabel("Right Arm", pcts[2], statuses[2], pcts[2])}'
+            f'</div>'
+            f'<div style="display:flex;gap:32px;">'
+            f'{floatlabel("Left Leg", pcts[3], statuses[3], pcts[3])}'
+            f'{floatlabel("Right Leg", pcts[4], statuses[4], pcts[4])}'
+            f'</div>'
+            f'</div>'
+        )
+
+        cards_html = '<div style="display:flex;flex-direction:column;gap:8px;">'
+        for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
+            cc, cbg, arr = change_meta(change)
+            st_c = seg_text(pct); st_bg = seg_badge_bg(pct)
+            disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
+            cards_html += (
+                f'<div style="background:var(--color-background-primary);'
+                f'border:0.5px solid var(--color-border-tertiary);'
+                f'border-radius:var(--border-radius-lg);'
+                f'padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">'
+                f'<div>'
+                f'<div style="font-size:11px;font-weight:500;color:var(--color-text-tertiary);'
+                f'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;">{seg}</div>'
+                f'<div style="font-size:22px;font-weight:500;color:var(--color-text-primary);line-height:1.1;">'
+                f'{mass}<span style="font-size:13px;font-weight:400;color:var(--color-text-secondary);margin-left:3px;">kg</span></div>'
+                f'<div style="display:inline-flex;align-items:center;gap:4px;margin-top:3px;'
+                f'background:{st_bg};border-radius:20px;padding:1px 8px;">'
+                f'<span style="font-size:12px;font-weight:500;color:{st_c};">{stat}</span>'
+                f'<span style="font-size:11px;color:{st_c};opacity:0.8;">· {pct:.1f}%</span>'
+                f'</div></div>'
+                f'<div style="background:{cbg};border-radius:var(--border-radius-md);'
+                f'padding:6px 12px;text-align:center;min-width:52px;">'
+                f'<div style="font-size:16px;color:{cc};">{arr}</div>'
+                f'<div style="font-size:12px;font-weight:500;color:{cc};">{disp}</div>'
+                f'</div>'
+                f'</div>'
+            )
+        cards_html += '</div>'
+
+        col_fig, col_cards = st.columns([1, 1.1], gap="large")
         with col_fig:
-            body_svg = (
-                f'<svg viewBox="0 0 100 200" width="110" xmlns="http://www.w3.org/2000/svg">'
-                f'<circle cx="50" cy="18" r="13" fill="#B0BEC5"/>'
-                f'<rect x="30" y="32" width="40" height="55" rx="8" fill="{tr_c}" opacity="0.75"/>'
-                f'<rect x="12" y="34" width="16" height="48" rx="7" fill="{la_c}" opacity="0.75"/>'
-                f'<rect x="72" y="34" width="16" height="48" rx="7" fill="{ra_c}" opacity="0.75"/>'
-                f'<rect x="27" y="90" width="18" height="70" rx="7" fill="{ll_c}" opacity="0.75"/>'
-                f'<rect x="55" y="90" width="18" height="70" rx="7" fill="{rl_c}" opacity="0.75"/>'
-                f'</svg>'
-            )
-
-            label_style = "font-size:0.78rem; color:#546E7A;"
-            status_bold = "font-size:0.75rem; font-weight:700;"
-            seg_bold    = "font-size:0.82rem; font-weight:600; color:#1E293B;"
-
-            trunk_label = (
-                f'<div style="text-align:center; margin-bottom:4px;">'
-                f'<span style="{label_style}">{pcts[1]:.1f}%</span><br>'
-                f'<span style="{status_bold} color:{tr_c};">{statuses[1]}</span><br>'
-                f'<span style="{seg_bold}">Trunk</span>'
-                f'</div>'
-            )
-            la_label = (
-                f'<div style="text-align:center; width:28%;">'
-                f'<span style="{label_style}">{pcts[0]:.1f}%</span><br>'
-                f'<span style="{status_bold} color:{la_c};">{statuses[0]}</span><br>'
-                f'<span style="{seg_bold}">Left Arm</span>'
-                f'</div>'
-            )
-            ra_label = (
-                f'<div style="text-align:center; width:28%;">'
-                f'<span style="{label_style}">{pcts[2]:.1f}%</span><br>'
-                f'<span style="{status_bold} color:{ra_c};">{statuses[2]}</span><br>'
-                f'<span style="{seg_bold}">Right Arm</span>'
-                f'</div>'
-            )
-            ll_label = (
-                f'<div style="text-align:center; width:40%;">'
-                f'<span style="{label_style}">{pcts[3]:.1f}%</span><br>'
-                f'<span style="{status_bold} color:{ll_c};">{statuses[3]}</span><br>'
-                f'<span style="{seg_bold}">Left Leg</span>'
-                f'</div>'
-            )
-            rl_label = (
-                f'<div style="text-align:center; width:40%;">'
-                f'<span style="{label_style}">{pcts[4]:.1f}%</span><br>'
-                f'<span style="{status_bold} color:{rl_c};">{statuses[4]}</span><br>'
-                f'<span style="{seg_bold}">Right Leg</span>'
-                f'</div>'
-            )
-
-            html = (
-                f'<div style="position:relative; width:100%; padding-bottom:8px;">'
-                f'{trunk_label}'
-                f'<div style="display:flex; align-items:center; justify-content:space-between; margin:6px 0;">'
-                f'{la_label}'
-                f'<div style="width:44%; display:flex; justify-content:center;">{body_svg}</div>'
-                f'{ra_label}'
-                f'</div>'
-                f'<div style="display:flex; justify-content:space-around; margin-top:4px;">'
-                f'{ll_label}{rl_label}'
-                f'</div>'
-                f'</div>'
-            )
-            st.markdown(html, unsafe_allow_html=True)
-
+            st.markdown(fig_html, unsafe_allow_html=True)
         with col_cards:
-            for seg, mass, change, pct, stat in zip(segments, masses, changes, pcts, statuses):
-                c_col, c_arrow = change_meta(change)
-                s_col = seg_color(pct)
-                disp = change if change.startswith("-") else (f"+{change}" if change != "0.00" else "0.0")
-                card = (
-                    f'<div style="background:#fff; border:1px solid #E2E8F0; border-radius:12px;'
-                    f' padding:10px 14px; margin-bottom:8px;'
-                    f' display:flex; align-items:center; justify-content:space-between;">'
-                    f'<div>'
-                    f'<div style="font-size:0.72rem; color:#94A3B8; font-weight:600; letter-spacing:0.04em;">{seg.upper()}</div>'
-                    f'<div style="font-size:1.45rem; font-weight:800; color:#0F172A; line-height:1.2;">'
-                    f'{mass} <span style="font-size:0.85rem; font-weight:500; color:#64748B;">kg</span></div>'
-                    f'<div style="font-size:0.72rem; font-weight:700; color:{s_col}; margin-top:1px;">{stat} · {pct:.1f}%</div>'
-                    f'</div>'
-                    f'<div style="background:#F8FAFC; border-radius:8px; padding:4px 10px; text-align:center; min-width:48px;">'
-                    f'<div style="font-size:1rem; color:{c_col};">{c_arrow}</div>'
-                    f'<div style="font-size:0.72rem; font-weight:700; color:{c_col};">{disp}</div>'
-                    f'</div>'
-                    f'</div>'
-                )
-                st.markdown(card, unsafe_allow_html=True)
-            st.caption("Change from previous measurement")
+            st.markdown(cards_html, unsafe_allow_html=True)
+            st.caption("↑↓ Change from previous measurement")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Long-Term Musculoskeletal Health
