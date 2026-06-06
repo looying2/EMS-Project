@@ -1544,15 +1544,37 @@ if user_role == "Doctor":
         masses   = [1.13,        13.3,     1.21,         5.11,       5.13      ]
         changes  = ["0.00",     "-0.1",   "0.00",       "+0.04",    "+0.05"   ]
 
-        # Radar chart (pentagon) using Plotly
+                # Radar chart (pentagon) with anatomical orientation
         import plotly.graph_objects as go
 
+        # Define custom angular positions (in degrees) for each segment
+        # 0° = right; 90° = top; 180° = left; 270° = bottom
+        angles = {
+            "Right Arm": 30,      # top right
+            "Trunk":     90,      # top center
+            "Left Arm":  150,     # top left
+            "Left Leg":  210,     # bottom left
+            "Right Leg": 330      # bottom right (or  -30°)
+        }
+
+        # Order the data to match the angular positions around the circle
+        ordered_segments = ["Right Arm", "Trunk", "Left Arm", "Left Leg", "Right Leg"]
+        ordered_pcts = [
+            pcts[segments.index("Right Arm")],
+            pcts[segments.index("Trunk")],
+            pcts[segments.index("Left Arm")],
+            pcts[segments.index("Left Leg")],
+            pcts[segments.index("Right Leg")]
+        ]
+
+        # Convert percentages to list in the same order
         fig_radar = go.Figure()
         fig_radar.add_trace(go.Scatterpolar(
-            r=pcts,
-            theta=segments,
+            r=ordered_pcts,
+            theta=[angles[seg] for seg in ordered_segments],
+            thetaunit="degrees",          # use degrees instead of category names
             fill='toself',
-            marker=dict(color='#2A9D8F', size=6),
+            marker=dict(color='#2A9D8F', size=5),
             line=dict(color='#2A9D8F', width=2),
             name='% of ideal'
         ))
@@ -1562,11 +1584,14 @@ if user_role == "Doctor":
                     visible=True,
                     range=[0, 100],
                     tickvals=[0, 25, 50, 75, 100],
-                    tickfont=dict(size=10)
+                    tickfont=dict(size=9)
                 ),
                 angularaxis=dict(
-                    tickfont=dict(size=11, weight='bold'),
-                    rotation=90,
+                    tickmode='array',
+                    tickvals=[angles[seg] for seg in ordered_segments],
+                    ticktext=ordered_segments,
+                    tickfont=dict(size=10, weight='bold'),
+                    rotation=0,            # keep 0° at right; we set explicit angles
                     direction='clockwise'
                 )
             ),
@@ -1576,21 +1601,22 @@ if user_role == "Doctor":
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
-        # Optional: add a reference circle at 90%
-        fig_radar.add_shape(
-            type="circle", xref="paper", yref="paper",
-            x0=0, y0=0, x1=1, y1=1,
-            line=dict(color="rgba(46, 125, 50, 0.3)", width=1, dash="dash"),
-            visible=False   # not straightforward in polar; keep simple
-        )
-        # Instead, add a radial line at 90% using scatterpolar (invisible line)
-        # But the radar itself is enough.
+        # Optional: add a faint 90% reference circle (as a separate trace)
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[90]*5,
+            theta=[angles[seg] for seg in ordered_segments],
+            thetaunit="degrees",
+            fill='none',
+            line=dict(color='rgba(46,125,50,0.3)', width=1.5, dash='dash'),
+            name='Ideal (90%)',
+            showlegend=False
+        ))
 
         col_fig, col_cards = st.columns([1, 1], gap="large")
 
         with col_fig:
             st.plotly_chart(fig_radar, use_container_width=True)
-            st.caption("Radar chart: distance from centre = % of ideal muscle mass.\nGreen area indicates ≥90% (Normal).")
+            st.caption("Radar chart: distance from centre = % of ideal muscle mass.\nDashed line = 90% threshold.")
 
         with col_cards:
             # (keep the existing metric cards exactly as before)
