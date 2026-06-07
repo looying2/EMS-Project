@@ -757,75 +757,167 @@ if st.session_state.auth_user is None:
 
     st.markdown("""
     <style>
-    .login-wrap { max-width:420px; margin:60px auto 0; padding:0 16px; }
+    .stApp { background: linear-gradient(135deg,#EFF6FF 0%,#E0F2FE 100%) !important; }
+    .auth-card {
+        background:#FFFFFF; border-radius:16px; padding:24px 22px;
+        box-shadow:0 4px 24px rgba(0,0,0,0.08); border:1px solid #E2E8F0;
+        margin-bottom:8px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
-    st.markdown("""
-    <div style="text-align:center;margin-bottom:28px;">
-        <div style="font-size:3.2rem;">🩺</div>
-        <div style="font-size:1.7rem;font-weight:800;color:#0F172A;margin-top:8px;">RehaTech v2.0</div>
-        <div style="font-size:0.9rem;color:#64748B;margin-top:6px;">AI-EMS Clinical Dashboard · Please sign in to continue</div>
-    </div>
-    """, unsafe_allow_html=True)
+    _lc, _cc, _rc = st.columns([1, 2, 1])
+    with _cc:
+        st.markdown("""
+        <div style="text-align:center;margin:32px 0 20px;">
+            <div style="font-size:3rem;margin-bottom:8px;">&#x1F9BA;</div>
+            <div style="font-size:1.75rem;font-weight:800;color:#0F172A;">RehaTech v2.0</div>
+            <div style="font-size:0.88rem;color:#64748B;margin-top:6px;">
+                AI-EMS Clinical Dashboard &nbsp;&middot;&nbsp; Universiti Malaya
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    _tab_li, _tab_reg = st.tabs(["🔑  Sign In", "📝  Register"])
+        _tab_li, _tab_reg = st.tabs(["Sign In", "Create Account"])
 
-    with _tab_li:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        _li_email = st.text_input("Email", key="li_email", placeholder="clinician@hospital.com")
-        _li_pw    = st.text_input("Password", type="password", key="li_pw", placeholder="••••••••")
-        if st.button("Sign In", type="primary", use_container_width=True, key="li_btn"):
-            if not _li_email or not _li_pw:
-                st.error("Please enter both email and password.")
-            else:
-                with st.spinner("Signing in…"):
-                    _user, _err = do_login(_li_email.strip(), _li_pw)
-                if _err:
-                    st.error(_err)
+        # ── SIGN IN TAB ──────────────────────────────────────────────────
+        with _tab_li:
+            st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+            st.markdown("""
+            <div style="margin-bottom:16px;">
+                <div style="font-size:1rem;font-weight:700;color:#0F172A;">Welcome back</div>
+                <div style="font-size:0.8rem;color:#64748B;margin-top:2px;">
+                    Your role is loaded automatically from your account.
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            _li_email = st.text_input("Email address", key="li_email",
+                                      placeholder="clinician@hospital.com")
+            _li_pw    = st.text_input("Password", type="password", key="li_pw",
+                                      placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;")
+
+            if st.button("Sign In", type="primary", use_container_width=True, key="li_btn"):
+                if not _li_email or not _li_pw:
+                    st.error("Please enter both email and password.")
                 else:
-                    _uid  = _user["localId"]
-                    _role = fb_get_user_role(_uid)
-                    _name = (fb_read(f"users/{_uid}/display_name") or _li_email.split("@")[0])
-                    st.session_state.auth_user = _user
-                    st.session_state.auth_role = _role
-                    st.session_state.auth_name = _name
-                    st.success(f"Welcome, {_name}!")
-                    time.sleep(0.5)
-                    st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+                    with st.spinner("Signing in..."):
+                        _user, _err = do_login(_li_email.strip(), _li_pw)
+                    if _err:
+                        st.error(_err)
+                    else:
+                        _uid  = _user["localId"]
+                        _role = fb_get_user_role(_uid)
+                        _name = (fb_read(f"users/{_uid}/display_name") or
+                                 _li_email.split("@")[0])
+                        st.session_state.auth_user = _user
+                        st.session_state.auth_role = _role
+                        st.session_state.auth_name = _name
+                        _role_icon = "Doctor" if _role == "Doctor" else "Caregiver"
+                        st.success(f"Signed in as {_name} ({_role_icon})")
+                        time.sleep(0.6)
+                        st.rerun()
 
-    with _tab_reg:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        _reg_name  = st.text_input("Full name", key="reg_name", placeholder="Dr. Sarah Tan")
-        _reg_email = st.text_input("Email", key="reg_email", placeholder="clinician@hospital.com")
-        _reg_role  = st.selectbox("Role", ["Doctor", "Caregiver"], key="reg_role")
-        _reg_pw    = st.text_input("Password (min 6 chars)", type="password", key="reg_pw", placeholder="••••••••")
-        _reg_pw2   = st.text_input("Confirm password", type="password", key="reg_pw2", placeholder="••••••••")
-        if st.button("Create Account", type="primary", use_container_width=True, key="reg_btn"):
-            if not all([_reg_name, _reg_email, _reg_pw, _reg_pw2]):
-                st.error("All fields are required.")
-            elif _reg_pw != _reg_pw2:
-                st.error("Passwords do not match.")
-            elif len(_reg_pw) < 6:
-                st.error("Password must be at least 6 characters.")
+            st.markdown("""
+            <div style="margin-top:14px;padding:10px 14px;background:#F0F9FF;
+                        border-radius:10px;border:1px solid #BAE6FD;">
+                <div style="font-size:0.78rem;font-weight:700;color:#0369A1;margin-bottom:4px;">
+                    How roles work
+                </div>
+                <div style="font-size:0.75rem;color:#0369A1;line-height:1.6;">
+                    Your role is chosen when you register.<br>
+                    <b>Doctor</b> &mdash; full clinical dashboard with all 5 tabs.<br>
+                    <b>Caregiver</b> &mdash; simplified large-text monitoring view.
+                </div>
+            </div>""", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── REGISTER TAB ─────────────────────────────────────────────────
+        with _tab_reg:
+            st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+            st.markdown("""
+            <div style="font-size:1rem;font-weight:700;color:#0F172A;margin-bottom:4px;">
+                Create your account
+            </div>
+            <div style="font-size:0.8rem;color:#64748B;margin-bottom:14px;">
+                Choose your role carefully &mdash; it determines what you can access.
+            </div>""", unsafe_allow_html=True)
+
+            # Visual role cards
+            _rc1, _rc2 = st.columns(2)
+            with _rc1:
+                st.markdown("""
+                <div style="border:2px solid #2563EB;border-radius:12px;padding:14px;
+                            background:#EFF6FF;text-align:center;">
+                    <div style="font-size:1.6rem;">&#x1FA7A;</div>
+                    <div style="font-weight:700;color:#1D4ED8;font-size:0.9rem;margin-top:4px;">Doctor</div>
+                    <div style="font-size:0.72rem;color:#3B82F6;margin-top:3px;line-height:1.5;">
+                        Full clinical access<br>All 5 tabs + AI summary<br>Parameter approval
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            with _rc2:
+                st.markdown("""
+                <div style="border:2px solid #059669;border-radius:12px;padding:14px;
+                            background:#ECFDF5;text-align:center;">
+                    <div style="font-size:1.6rem;">&#x1F464;</div>
+                    <div style="font-weight:700;color:#065F46;font-size:0.9rem;margin-top:4px;">Caregiver</div>
+                    <div style="font-size:0.72rem;color:#059669;margin-top:3px;line-height:1.5;">
+                        Simplified view<br>EMG + gait monitor<br>Patient feedback only
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            _reg_role = st.selectbox("I am registering as a:",
+                                     ["Doctor", "Caregiver"], key="reg_role")
+
+            _reg_name  = st.text_input("Full name", key="reg_name",
+                                       placeholder="Dr. Tan Wei Ling")
+            _reg_email = st.text_input("Email address", key="reg_email",
+                                       placeholder="clinician@hospital.com")
+            _reg_pw    = st.text_input("Password (min 6 chars)", type="password",
+                                       key="reg_pw", placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;")
+            _reg_pw2   = st.text_input("Confirm password", type="password",
+                                       key="reg_pw2", placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;")
+
+            if _reg_role == "Doctor":
+                st.markdown("""<div style="background:#EFF6FF;border-radius:8px;padding:8px 12px;
+                    font-size:0.76rem;color:#1D4ED8;margin-bottom:8px;">
+                    You will see: Live &amp; AI &middot; Body Composition &middot;
+                    Device Control &middot; Records &amp; Reports &middot; Clinical AI Chat
+                    </div>""", unsafe_allow_html=True)
             else:
-                with st.spinner("Creating account…"):
-                    _user, _err = do_register(_reg_email.strip(), _reg_pw, _reg_role, _reg_name.strip())
-                if _err:
-                    st.error(_err)
-                else:
-                    st.success(f"Account created! You can now sign in as {_reg_role}.")
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown("""<div style="background:#ECFDF5;border-radius:8px;padding:8px 12px;
+                    font-size:0.76rem;color:#065F46;margin-bottom:8px;">
+                    You will see: EMG monitor &middot; Gait status &middot;
+                    Pain/fatigue sliders &middot; Muscle health grid
+                    </div>""", unsafe_allow_html=True)
 
-    st.markdown("""
-    <div style="text-align:center;margin-top:20px;font-size:0.78rem;color:#94A3B8;">
-        RehaTech v2.0 · Universiti Malaya · KIE3009 / KIE3011
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("Create Account", type="primary",
+                         use_container_width=True, key="reg_btn"):
+                if not all([_reg_name, _reg_email, _reg_pw, _reg_pw2]):
+                    st.error("All fields are required.")
+                elif _reg_pw != _reg_pw2:
+                    st.error("Passwords do not match.")
+                elif len(_reg_pw) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    with st.spinner("Creating account..."):
+                        _user, _err = do_register(_reg_email.strip(), _reg_pw,
+                                                  _reg_role, _reg_name.strip())
+                    if _err:
+                        st.error(_err)
+                    else:
+                        st.success(
+                            f"Account created as {_reg_role}. "
+                            f"Switch to the Sign In tab to log in.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("""
+        <div style="text-align:center;margin-top:16px;font-size:0.75rem;color:#94A3B8;">
+            RehaTech v2.0 &middot; KIE3009 / KIE3011 &middot; Universiti Malaya
+        </div>""", unsafe_allow_html=True)
+
     st.stop()
+
 
 # ==========================================
 # 6. SIDEBAR
