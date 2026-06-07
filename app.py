@@ -35,6 +35,36 @@ firebase_config = {
 firebase = pyrebase.initialize_app(firebase_config)
 db = firebase.database()
 
+FIREBASE_URL    = "https://ems-project-7ea46-default-rtdb.asia-southeast1.firebasedatabase.app"
+FIREBASE_SECRET = "8nUsdEhjNt7hQkhnPcNPAPHKXVY9SRNOIDcnXITW"
+
+def fb_write(path, data):
+    url = f"{FIREBASE_URL}/{path}.json?auth={FIREBASE_SECRET}"
+    try:
+        r = requests.put(url, json=data, timeout=5)
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Firebase write error: {e}")
+        return False
+
+def fb_read(path):
+    url = f"{FIREBASE_URL}/{path}.json?auth={FIREBASE_SECRET}"
+    try:
+        r = requests.get(url, timeout=5)
+        return r.json()
+    except Exception as e:
+        print(f"Firebase read error: {e}")
+        return None
+
+def fb_push(path, data):
+    url = f"{FIREBASE_URL}/{path}.json?auth={FIREBASE_SECRET}"
+    try:
+        r = requests.post(url, json=data, timeout=5)
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Firebase push error: {e}")
+        return False
+
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
 # ==========================================
@@ -288,12 +318,12 @@ ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
 ML_CALL_INTERVAL = 5  # seconds between ML API calls
-SESSION_DURATION_MINUTES = 20   # fixed EMS protocol duration in minutes
 ss_init("ml_latest", {})
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
+ss_init("current_session_id", None)
 
 # Process-level shared state for background ML thread ↔ main loop communication.
 # st.cache_resource survives all reruns and is guaranteed to return the same object.
@@ -347,6 +377,24 @@ def generate_session_summary():
         answer = "Could not generate AI summary. The RAG service may be offline."
     
     st.session_state.session_summary_text = answer
+
+    # Save session summary to Firebase
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    st.session_state.current_session_id = session_id
+    tele_snap = st.session_state.telemetry
+    fb_write(f"patients/{patient_id}/sessions/{session_id}", {
+        "date":              datetime.now().strftime("%Y-%m-%d"),
+        "duration_min":      SESSION_DURATION_MINUTES,
+        "avg_emg":           float(tele_snap['emg'].mean()) if not tele_snap.empty else 0,
+        "max_emg":           float(tele_snap['emg'].max())  if not tele_snap.empty else 0,
+        "pain_score":        st.session_state.live_pain,
+        "fatigue_score":     st.session_state.live_fatigue,
+        "ml_classification": st.session_state.ml_prediction,
+        "ml_confidence":     float(st.session_state.ml_probability * 100),
+        "rag_summary":       answer if isinstance(answer, str) else json.dumps(answer),
+        "generated_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "approval_status":   "pending"
+    })
 
 def run_easyocr(uploaded_file):
     image = Image.open(uploaded_file)
@@ -675,6 +723,17 @@ with st.sidebar:
     age_group = st.selectbox("Age Group", ["60-69", "70-79", "80+"])
     condition_tags = st.multiselect("Conditions", ["Sarcopenia", "Post-Stroke", "Osteoarthritis"], default=["Sarcopenia"])
     st.info(f"Height: 170 cm | Weight: 70 kg")
+
+    # Save patient profile to Firebase on every rerun (lightweight, idempotent)
+    fb_write(f"patients/{patient_id}/profile", {
+        "patient_id":  patient_id,
+        "age_group":   age_group,
+        "conditions":  condition_tags,
+        "height_cm":   170,
+        "weight_kg":   70,
+        "last_seen":   datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
     user_role = st.selectbox("User Role", ["Doctor", "Caregiver"])
     st.divider()
     st.subheader("Simulation")
@@ -1259,7 +1318,24 @@ if user_role == "Doctor":
                         if st.button("Save to Patient Record", use_container_width=True):
                             details = json.dumps(metrics)
                             log_event(patient_id, "INBODY_OCR_UPLOAD", details)
-                            st.toast("InBody OCR data saved!", icon="✅")
+                            report_date = metrics.get("Test Date", datetime.now().strftime("%Y-%m-%d"))
+                            safe_date = str(report_date).replace("/", "-").replace(" ", "_").replace(":", "")
+                            bia_data = {
+                                "date":                    report_date,
+                                "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
+                                "body_fat_pct":            metrics.get("Body Fat Percentage"),
+                                "bmi":                     metrics.get("BMI"),
+                                "visceral_fat_level":      metrics.get("Visceral Fat Level"),
+                                "inbody_score":            metrics.get("InBody Score"),
+                                "smi":                     metrics.get("SMI"),
+                                "weight_kg":               metrics.get("Weight (kg)"),
+                                "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "source":                  "EasyOCR_InBody"
+                            }
+                            if fb_write(f"patients/{patient_id}/bia_reports/{safe_date}", bia_data):
+                                st.toast("InBody OCR data saved to Firebase!", icon="✅")
+                            else:
+                                st.toast("Saved locally. Firebase sync failed.", icon="⚠️")
                     except Exception as e:
                         st.error(f"OCR failed: {e}")
             else:
@@ -1304,122 +1380,140 @@ if user_role == "Doctor":
             if st.button("Regenerate Summary", key="regenerate_summary"):
                 st.session_state.session_summary_generated = False
                 st.rerun()
+
+            st.divider()
+            st.subheader("🔐 Clinician Approval")
+            st.info("Review the AI-generated summary above before approving parameter changes for the next session.")
+
+            _col_approve, _col_decline = st.columns(2)
+            _session_id = st.session_state.get("current_session_id", None)
+
+            with _col_approve:
+                if st.button("✅ Approve Recommendation", type="primary",
+                             use_container_width=True, key="btn_approve"):
+                    if _session_id:
+                        fb_write(
+                            f"patients/{patient_id}/sessions/{_session_id}/approval",
+                            {
+                                "status":    "approved",
+                                "clinician": user_role,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                        )
+                    log_event(patient_id, "APPROVAL_GRANTED", f"Session={_session_id}")
+                    st.success("✅ Recommendation approved and saved to Firebase.")
+
+            with _col_decline:
+                if st.button("❌ Decline — Keep Current Parameters",
+                             use_container_width=True, key="btn_decline"):
+                    if _session_id:
+                        fb_write(
+                            f"patients/{patient_id}/sessions/{_session_id}/approval",
+                            {
+                                "status":    "declined",
+                                "clinician": user_role,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                        )
+                    log_event(patient_id, "APPROVAL_DECLINED", f"Session={_session_id}")
+                    st.warning("❌ Declined. Current parameters will be retained.")
+
+            # Show current approval status from Firebase
+            if _session_id:
+                try:
+                    _ap = fb_read(f"patients/{patient_id}/sessions/{_session_id}/approval")
+                    if _ap and isinstance(_ap, dict):
+                        _ts  = _ap.get("timestamp", "—")
+                        _by  = _ap.get("clinician", "—")
+                        if _ap.get("status") == "approved":
+                            st.markdown(f"""
+                            <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;
+                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:1.2rem;">✅</span>
+                                <div>
+                                    <div style="font-size:0.82rem;font-weight:700;color:#15803D;">Last Decision: Approved</div>
+                                    <div style="font-size:0.75rem;color:#166534;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                                </div>
+                            </div>""", unsafe_allow_html=True)
+                        elif _ap.get("status") == "declined":
+                            st.markdown(f"""
+                            <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;
+                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:1.2rem;">❌</span>
+                                <div>
+                                    <div style="font-size:0.82rem;font-weight:700;color:#92400E;">Last Decision: Declined</div>
+                                    <div style="font-size:0.75rem;color:#78350F;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                                </div>
+                            </div>""", unsafe_allow_html=True)
+                except Exception:
+                    pass
+
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis
+        # Segmental Lean Mass Analysis 
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("💪 Segmental Lean Mass Analysis")
-        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
-
-        _seg_names  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        _pcts       = [65.3, 84.8, 69.8, 93.4, 93.9]
-        _statuses   = ["Under", "Under", "Under", "Normal", "Normal"]
-        _masses     = [1.13, 13.3, 1.21, 5.11, 5.13]
-        _changes    = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-
-        def _seg_color(p):
-            return "#EF5350" if p < 90 else "#2A9D8F"
-
-        def _change_meta(c):
-            if c.startswith("-"):    return "#DC2626", "↓"
-            elif c in ("0.00","0"):  return "#94A3B8", "→"
-            else:                    return "#16A34A", "↑"
-
-        # --- Plotly radar chart (pentagon) ---
-        # Vertex order clockwise from top: Trunk, Right Arm, Right Leg, Left Leg, Left Arm
-        _radar_order = ["Trunk", "Right Arm", "Right Leg", "Left Leg", "Left Arm"]
-        _radar_pcts  = [_pcts[_seg_names.index(s)] for s in _radar_order]
-        _radar_cols  = [_seg_color(p) for p in _radar_pcts]
-        _radar_pcts_closed = _radar_pcts + [_radar_pcts[0]]   # close polygon
-        _radar_theta = _radar_order + [_radar_order[0]]
-
-        import plotly.graph_objects as _go
-        _fig_radar = _go.Figure()
-
-        # filled data polygon
-        _fig_radar.add_trace(_go.Scatterpolar(
-            r=_radar_pcts_closed,
-            theta=_radar_theta,
-            fill="toself",
-            fillcolor="rgba(42,157,143,0.18)",
-            line=dict(color="#2A9D8F", width=2),
-            marker=dict(size=7, color=[_seg_color(p) for p in _radar_pcts + [_radar_pcts[0]]]),
-            name="% of ideal",
-            hovertemplate="%{theta}: %{r:.1f}%<extra></extra>"
-        ))
-
-        # dashed 90% reference ring
-        _fig_radar.add_trace(_go.Scatterpolar(
-            r=[90]*6,
-            theta=_radar_theta,
-            fill="none",
-            line=dict(color="rgba(46,125,50,0.35)", width=1.5, dash="dash"),
-            hoverinfo="skip",
-            showlegend=False
-        ))
-
-        _fig_radar.update_layout(
-            polar=dict(
-                bgcolor="rgba(240,247,255,0.6)",
-                radialaxis=dict(
-                    visible=True, range=[0,100],
-                    tickvals=[25,50,75,100],
-                    tickfont=dict(size=8, color="#94A3B8"),
-                    gridcolor="#E2E8F0",
-                    linecolor="#E2E8F0"
-                ),
-                angularaxis=dict(
-                    tickmode="array",
-                    tickvals=_radar_order,
-                    ticktext=[f"<b>{s}</b>" for s in _radar_order],
-                    tickfont=dict(size=11),
-                    rotation=90,           # Trunk at top
-                    direction="clockwise",
-                    gridcolor="#E2E8F0",
-                    linecolor="#E2E8F0"
-                )
-            ),
-            showlegend=False,
-            height=360,
-            margin=dict(l=50, r=50, t=30, b=30),
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
-
-        # --- SVG body silhouette (centred, color-coded, no HTML comments) ---
-        _la = _seg_color(_pcts[0]); _tr = _seg_color(_pcts[1]); _ra = _seg_color(_pcts[2])
-        _ll = _seg_color(_pcts[3]); _rl = _seg_color(_pcts[4])
-
-        _col_fig, _col_cards = st.columns([1, 1.05], gap="large")
-
-        with _col_fig:
-            st.plotly_chart(_fig_radar, use_container_width=True)
-            st.caption("Dashed ring = 90% ideal threshold")
-
-        with _col_cards:
+        st.subheader("💪 Segmental Lean Mass Analysis ")
+        st.caption("Percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
+        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
+        statuses = ["Under", "Under", "Under", "Normal", "Normal"]
+        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
+        changes = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
+        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
+        col_left, col_right = st.columns([1.2, 0.9], gap="medium")
+        with col_left:
+            st.markdown("#### Performance vs Ideal")
+            for seg, pct, stat, icon in zip(segments, percentages, statuses, icons):
+                bar_color = "#EF5350" if pct < 90 else "#2A9D8F"
+                status_color = "#EF5350" if pct < 90 else "#2A9D8F"
+                st.markdown(f"""
+                <div style="margin-bottom: 22px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+                        <span style="font-size: 1.1rem;">{icon}</span>
+                        <span style="font-weight: 600; font-size: 0.9rem;">{seg}</span>
+                        <span style="margin-left: auto; font-size: 0.75rem; background-color: #F1F5F9; padding: 2px 8px; border-radius: 20px; color: {status_color}; font-weight: 500;">{stat}</span>
+                    </div>
+                    <div style="background-color: #E2E8F0; border-radius: 12px; height: 28px; width: 100%; position: relative;">
+                        <div style="background: linear-gradient(90deg, {bar_color}, {bar_color}CC); width: {pct}%; height: 28px; border-radius: 12px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;">
+                            <span style="color: white; font-size: 0.75rem; font-weight: 600;">{pct:.1f}%</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        with col_right:
             st.markdown("#### Soft Lean Mass (kg)")
-            for _seg, _mass, _chg, _pct, _stat in zip(_seg_names, _masses, _changes, _pcts, _statuses):
-                _cc, _arr = _change_meta(_chg)
-                _sc = _seg_color(_pct)
-                _disp = _chg if _chg.startswith("-") else (f"+{_chg}" if _chg != "0.00" else "0.0")
-                _cbg = "#FEE2E2" if _cc == "#DC2626" else "#DCFCE7" if _cc == "#16A34A" else "#F1F5F9"
-                st.markdown(
-                    f'<div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;'
-                    f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
-                    f'<div style="display:flex;align-items:center;gap:9px;">'
-                    f'<div>'
-                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{_seg}</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{_mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
-                    f'<div style="font-size:12px;font-weight:600;color:{_sc};">{_stat} · {_pct:.1f}%</div>'
-                    f'</div></div>'
-                    f'<div style="background:{_cbg};border-radius:8px;padding:5px 10px;text-align:center;min-width:46px;">'
-                    f'<div style="font-size:15px;color:{_cc};">{_arr}</div>'
-                    f'<div style="font-size:11px;font-weight:600;color:{_cc};">{_disp}</div>'
-                    f'</div></div>',
-                    unsafe_allow_html=True
-                )
-            st.caption("Change from previous measurement")
-
+            for seg, mass, change, icon in zip(segments, masses, changes, icons):
+                if change.startswith("-"):
+                    change_color = "#DC2626"
+                    arrow = "↓"
+                elif change == "0.00":
+                    change_color = "#64748B"
+                    arrow = "→"
+                else:
+                    change_color = "#16A34A"
+                    arrow = "↑"
+                sign = "" if change.startswith("-") else "+" if change != "0.00" else ""
+                display_change = f"{sign}{change}" if change != "0.00" else "0.00"
+                st.markdown(f"""
+                <div style="background-color: #F8FAFC; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; border-left: 4px solid {change_color};">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 1.1rem;">{icon}</span>
+                            <span style="font-weight: 500;">{seg}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="font-size: 1.3rem; font-weight: 700;">{mass}</span>
+                            <span style="font-size: 0.8rem;"> kg</span>
+                            <div style="font-size: 0.7rem; color: {change_color};">
+                                {arrow} {display_change} vs previous
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            st.caption("📈 Change from previous measurement (demo data)")
         st.markdown('</div>', unsafe_allow_html=True)
+
         # Long-Term Musculoskeletal Health
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📈 Long-Term Musculoskeletal Health")
@@ -1456,145 +1550,10 @@ if user_role == "Doctor":
         # Session Audit Trail
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
-
         df_logs = read_logs(patient_id)
-
-        if df_logs.empty:
-            st.markdown("""
-            <div style="text-align:center;padding:40px 0;color:#94A3B8;">
-                <div style="font-size:2rem;margin-bottom:8px;">📂</div>
-                <div style="font-size:0.95rem;font-weight:600;color:#64748B;">No audit events recorded for this patient.</div>
-                <div style="font-size:0.8rem;margin-top:4px;">Events will appear here once a session is started.</div>
-            </div>""", unsafe_allow_html=True)
-        else:
-            # ── Clinical summary bar ───────────────────────────────────────
-            total_sessions  = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
-            total_stops     = df_logs[df_logs['event'] == 'SESSION_STOP'].shape[0]
-            emergency_stops = df_logs[df_logs['event'] == 'EMERGENCY_STOP'].shape[0]
-            param_changes   = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
-            last_ts         = str(df_logs['ts'].iloc[0])[:16].replace("T", " ")
-
-            st.markdown(f"""
-            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;">
-                <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px;text-align:center;">
-                    <div style="font-size:1.6rem;font-weight:700;color:#15803D;">{total_sessions}</div>
-                    <div style="font-size:0.72rem;font-weight:600;color:#166534;letter-spacing:0.04em;margin-top:2px;">SESSIONS STARTED</div>
-                </div>
-                <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px;text-align:center;">
-                    <div style="font-size:1.6rem;font-weight:700;color:#B45309;">{total_stops}</div>
-                    <div style="font-size:0.72rem;font-weight:600;color:#92400E;letter-spacing:0.04em;margin-top:2px;">SESSIONS STOPPED</div>
-                </div>
-                <div style="background:{"#FEF2F2" if emergency_stops > 0 else "#F8FAFC"};border:1px solid {"#FECACA" if emergency_stops > 0 else "#E2E8F0"};border-radius:10px;padding:12px;text-align:center;">
-                    <div style="font-size:1.6rem;font-weight:700;color:{"#DC2626" if emergency_stops > 0 else "#94A3B8"};">{emergency_stops}</div>
-                    <div style="font-size:0.72rem;font-weight:600;color:{"#991B1B" if emergency_stops > 0 else "#64748B"};letter-spacing:0.04em;margin-top:2px;">EMERGENCY STOPS</div>
-                </div>
-                <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;padding:12px;text-align:center;">
-                    <div style="font-size:1.6rem;font-weight:700;color:#6D28D9;">{param_changes}</div>
-                    <div style="font-size:0.72rem;font-weight:600;color:#5B21B6;letter-spacing:0.04em;margin-top:2px;">PARAM ADJUSTMENTS</div>
-                </div>
-                <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:12px;text-align:center;">
-                    <div style="font-size:0.82rem;font-weight:700;color:#0369A1;">{last_ts}</div>
-                    <div style="font-size:0.72rem;font-weight:600;color:#075985;letter-spacing:0.04em;margin-top:2px;">LAST EVENT</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # ── Filter bar ─────────────────────────────────────────────────
-            fc1, fc2, fc3 = st.columns([1.2, 2, 0.8])
-            all_events = ["All Events"] + sorted(df_logs['event'].unique().tolist())
-            with fc1:
-                evt_filter = st.selectbox("Event Type", all_events, key="audit_evt_filter", label_visibility="collapsed")
-            with fc2:
-                search_term = st.text_input("Search", placeholder="🔍  Search by event or details…", key="audit_search", label_visibility="collapsed")
-            with fc3:
-                show_n = st.selectbox("Show", [20, 50, 100, 200], key="audit_show_n", label_visibility="collapsed")
-
-            filtered = df_logs.copy()
-            if evt_filter != "All Events":
-                filtered = filtered[filtered['event'] == evt_filter]
-            if search_term:
-                filtered = filtered[
-                    filtered['details'].str.contains(search_term, case=False, na=False) |
-                    filtered['event'].str.contains(search_term, case=False, na=False)
-                ]
-            filtered = filtered.head(show_n)
-
-            # ── Table header ───────────────────────────────────────────────
-            st.markdown(f"""
-            <div style="display:grid;grid-template-columns:160px 180px 1fr;gap:0;
-                        background:#F1F5F9;border:1px solid #E2E8F0;
-                        border-radius:8px 8px 0 0;padding:8px 14px;margin-top:8px;">
-                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DATE / TIME</span>
-                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">EVENT</span>
-                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DETAILS</span>
-            </div>""", unsafe_allow_html=True)
-
-            # ── Event config ───────────────────────────────────────────────
-            _ecfg = {
-                "SESSION_START":     ("#DCFCE7", "#15803D", "#F0FDF4", "Session Started"),
-                "SESSION_STOP":      ("#FEF9C3", "#92400E", "#FFFBEB", "Session Stopped"),
-                "SESSION_PAUSE":     ("#DBEAFE", "#1D4ED8", "#EFF6FF", "Session Paused"),
-                "EMERGENCY_STOP":    ("#FEE2E2", "#991B1B", "#FFF5F5", "⚠ Emergency Stop"),
-                "PARAM_CHANGE":      ("#EDE9FE", "#5B21B6", "#F5F3FF", "Parameter Adjusted"),
-                "INBODY_OCR_UPLOAD": ("#CFFAFE", "#0E7490", "#F0FDFF", "InBody Scan Uploaded"),
-            }
-            _default_cfg = ("#E2E8F0", "#475569", "#F8FAFC", "System Event")
-
-            rows_html = ""
-            for i, (_, row) in enumerate(filtered.iterrows()):
-                dot_c, text_c, bg_c, label = _ecfg.get(row['event'], _default_cfg)
-                details_text = str(row['details']) if row['details'] else "—"
-                ts_raw = str(row['ts'])[:19]
-                date_part = ts_raw[:10]
-                time_part = ts_raw[11:19] if len(ts_raw) > 10 else ""
-                border_top = "1px solid #E2E8F0" if i > 0 else "none"
-                radius = "0 0 8px 8px" if i == len(filtered) - 1 else "0"
-                rows_html += (
-                    f'<div style="display:grid;grid-template-columns:160px 180px 1fr;gap:0;'
-                    f'background:{bg_c};border-left:1px solid #E2E8F0;border-right:1px solid #E2E8F0;'
-                    f'border-top:{border_top};border-bottom:1px solid #E2E8F0;'
-                    f'border-radius:{radius};padding:9px 14px;align-items:center;">'
-                    f'<div>'
-                    f'<div style="font-size:0.78rem;font-weight:600;color:#1E293B;font-family:monospace;">{date_part}</div>'
-                    f'<div style="font-size:0.72rem;color:#94A3B8;font-family:monospace;">{time_part}</div>'
-                    f'</div>'
-                    f'<div style="display:flex;align-items:center;gap:7px;">'
-                    f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot_c};border:1.5px solid {text_c};flex-shrink:0;"></span>'
-                    f'<span style="font-size:0.78rem;font-weight:600;color:{text_c};">{label}</span>'
-                    f'</div>'
-                    f'<div style="font-size:0.77rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{details_text}</div>'
-                    f'</div>'
-                )
-            st.markdown(rows_html, unsafe_allow_html=True)
-            st.caption(f"Showing {len(filtered)} of {len(df_logs)} total events · Patient: {patient_id}")
-
-        st.divider()
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            csv = df_logs.to_csv(index=False).encode("utf-8") if not df_logs.empty else b""
-            st.download_button(
-                "⬇️ Export Audit Trail (CSV)",
-                csv,
-                f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                "text/csv",
-                use_container_width=True,
-                disabled=df_logs.empty
-            )
-        with col_dl2:
-            if not df_logs.empty:
-                audit_txt = f"CLINICAL AUDIT TRAIL\n{'='*50}\n"
-                audit_txt += f"Patient ID : {patient_id}\n"
-                audit_txt += f"Generated  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                audit_txt += f"{'='*50}\n\n"
-                for _, row in df_logs.iterrows():
-                    audit_txt += f"[{row['ts']}]  {row['event']:<22}  {row['details']}\n"
-                st.download_button(
-                    "📄 Export Formatted Report (TXT)",
-                    audit_txt.encode("utf-8"),
-                    f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    "text/plain",
-                    use_container_width=True
-                )
+        st.dataframe(df_logs, use_container_width=True, height=300)
+        csv = df_logs.to_csv(index=False).encode("utf-8")
+        st.download_button("Download Audit Trail in CSV", csv, f"audit_{patient_id}.csv", "text/csv")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Export Report
@@ -1730,199 +1689,215 @@ if user_role == "Doctor":
             # Store assistant message
             st.session_state.rag_messages.append({"role": "assistant", "content": answer, "references": references})
 
-else:
+else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
     # ==========================================
-    # CAREGIVER VIEW — Clean, simple, actionable
+    # SIMPLIFIED, ELDERLY-FRIENDLY DASHBOARD
     # ==========================================
     st.markdown("""
     <style>
-        .cg-header { font-size:1.6rem; font-weight:700; color:#1E293B; margin-bottom:2px; }
-        .cg-sub    { font-size:0.9rem; color:#64748B; margin-bottom:16px; }
-        .cg-card   { background:#fff; border-radius:16px; padding:18px 20px; margin-bottom:14px;
-                     border:1px solid #E2E8F0; box-shadow:0 2px 6px rgba(0,0,0,0.04); }
-        .cg-label  { font-size:0.72rem; font-weight:700; color:#94A3B8;
-                     letter-spacing:0.07em; text-transform:uppercase; margin-bottom:4px; }
-        .cg-value  { font-size:2rem; font-weight:800; color:#0F172A; line-height:1.1; }
-        .cg-unit   { font-size:0.85rem; font-weight:400; color:#64748B; margin-left:4px; }
-        .cg-desc   { font-size:0.82rem; color:#64748B; margin-top:4px; }
-        .cg-alert  { border-radius:12px; padding:14px 18px; margin-bottom:12px;
-                     font-size:1rem; font-weight:600; display:flex; align-items:center; gap:10px; }
+        h1, h2, h3 {
+            font-size: 2rem !important;
+        }
+        .care-card {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 18px;
+            text-align: center;
+            border: 1px solid #E2E8F0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .care-title {
+            font-size: 1.3rem;
+            color: #475569;
+            font-weight: 700;
+        }
+        .care-value {
+            font-size: 2.8rem;
+            font-weight: 900;
+            color: #0F172A;
+            margin-top: 6px;
+        }
+        .care-desc {
+            font-size: 1rem;
+            color: #475569;
+            margin-top: 6px;
+        }
+        div.stButton > button {
+            font-size: 1.3rem !important;
+            height: 60px !important;
+            border-radius: 16px !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stSlider"] label {
+            font-size: 1.3rem !important;
+            font-weight: 700 !important;
+        }
+        .stAlert {
+            font-size: 1.2rem !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
-    tele      = st.session_state.telemetry
+    st.markdown("## 👨‍👩‍👧 Caregiver View")
+    st.caption("Simple monitoring screen for patient comfort and safety.")
+
+    tele = st.session_state.telemetry
     latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
     pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
-    gait_pred  = st.session_state.ml_prediction
-    sys_status = st.session_state.system_status
 
-    # ── Top header ──────────────────────────────────────────────────────
-    h1, h2 = st.columns([3, 1])
-    with h1:
-        st.markdown(f'<div class="cg-header">👤 Caregiver Monitor</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="cg-sub">Patient: <strong>{patient_id}</strong> &nbsp;·&nbsp; Protocol: <strong>{protocol}</strong></div>', unsafe_allow_html=True)
-    with h2:
-        status_colors = {"ACTIVE":"#16A34A","PAUSED":"#D97706","STOPPED":"#DC2626","IDLE":"#64748B"}
-        status_bgs    = {"ACTIVE":"#F0FDF4","PAUSED":"#FFFBEB","STOPPED":"#FEF2F2","IDLE":"#F8FAFC"}
-        sc = status_colors.get(sys_status, "#64748B")
-        sb = status_bgs.get(sys_status, "#F8FAFC")
-        total_sec = st.session_state.elapsed_time
-        if sys_status == "ACTIVE" and st.session_state.session_start_time:
-            total_sec += time.time() - st.session_state.session_start_time
-        elapsed = int(total_sec)
-        timer_str = f"{elapsed//60:02d}:{elapsed%60:02d}"
-        st.markdown(f"""
-        <div style="background:{sb};border:1.5px solid {sc};border-radius:12px;
-                    padding:12px 16px;text-align:center;margin-top:4px;">
-            <div style="font-size:0.7rem;font-weight:700;color:{sc};letter-spacing:0.07em;">SESSION</div>
-            <div style="font-size:1.5rem;font-weight:800;color:{sc};">{sys_status}</div>
-            <div style="font-size:1rem;font-weight:600;color:{sc};font-family:monospace;">{timer_str}</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.divider()
-
-    # ── Alert banner (only shown when action needed) ────────────────────
-    pain_val    = st.session_state.get("live_pain", 0)
-    fatigue_val = st.session_state.get("live_fatigue", 0)
-
-    if sys_status == "ACTIVE":
-        if pain_val >= 7:
-            st.markdown("""<div class="cg-alert" style="background:#FEF2F2;border:1.5px solid #FECACA;color:#991B1B;">
-                🚨 <span>High pain reported (≥7/10). Consider stopping the session and notifying the clinician immediately.</span></div>""",
-                unsafe_allow_html=True)
-        elif pain_val >= 5:
-            st.markdown("""<div class="cg-alert" style="background:#FFFBEB;border:1.5px solid #FDE68A;color:#92400E;">
-                ⚠️ <span>Moderate pain reported. Monitor closely and report to the clinician if it worsens.</span></div>""",
-                unsafe_allow_html=True)
-        elif fatigue_val >= 7:
-            st.markdown("""<div class="cg-alert" style="background:#FFFBEB;border:1.5px solid #FDE68A;color:#92400E;">
-                😴 <span>High fatigue reported. Allow the patient to rest and reduce activity if needed.</span></div>""",
-                unsafe_allow_html=True)
-        elif pred_label == "Overexertion":
-            st.markdown("""<div class="cg-alert" style="background:#FEF2F2;border:1.5px solid #FECACA;color:#991B1B;">
-                🔴 <span>Overexertion detected from EMG signal. Reduce stimulation intensity or pause session.</span></div>""",
-                unsafe_allow_html=True)
-        else:
-            st.markdown("""<div class="cg-alert" style="background:#F0FDF4;border:1.5px solid #BBF7D0;color:#166534;">
-                ✅ <span>Patient condition is stable. No immediate action required.</span></div>""",
-                unsafe_allow_html=True)
-
-    # ── Live vitals row ─────────────────────────────────────────────────
-    st.markdown("### 📊 Live Readings")
-    v1, v2, v3, v4 = st.columns(4)
-
-    # EMG
-    emg_color = "#DC2626" if latest_emg > 700 else "#D97706" if latest_emg > 500 else "#16A34A" if latest_emg > 300 else "#64748B"
-    v1.markdown(f"""<div class="cg-card" style="border-left:4px solid {emg_color};">
-        <div class="cg-label">EMG Signal</div>
-        <div class="cg-value" style="color:{emg_color};">{latest_emg:.0f}<span class="cg-unit">µV</span></div>
-        <div class="cg-desc">{pred_label}</div>
-    </div>""", unsafe_allow_html=True)
-
-    # Muscle state
-    ms_colors = {"Relaxed":"#16A34A","Moderate Activity":"#D97706","Muscle Fatigue":"#EA580C","Overexertion":"#DC2626"}
-    ms_bgs    = {"Relaxed":"#F0FDF4","Moderate Activity":"#FFFBEB","Muscle Fatigue":"#FFF7ED","Overexertion":"#FEF2F2"}
-    ms_c = ms_colors.get(pred_label, "#64748B")
-    ms_b = ms_bgs.get(pred_label, "#F8FAFC")
-    v2.markdown(f"""<div class="cg-card" style="border-left:4px solid {ms_c};background:{ms_b};">
-        <div class="cg-label">Muscle State</div>
-        <div style="font-size:1.3rem;font-weight:800;color:{ms_c};line-height:1.2;">{pred_label}</div>
-        <div class="cg-desc">{pred_desc}</div>
-    </div>""", unsafe_allow_html=True)
-
-    # Gait
-    gait_known = gait_pred not in ("WAITING", "", "IDLE") and not gait_pred.startswith("API")
-    if gait_known:
-        g_ok = gait_pred in ("Normal", "NORMAL")
-        gc = "#16A34A" if g_ok else "#DC2626"
-        gb = "#F0FDF4" if g_ok else "#FEF2F2"
-        g_label = "Normal" if g_ok else "Abnormal"
-        g_desc  = "Gait pattern is stable." if g_ok else "Notify clinician — gait irregularity detected."
+    # status emoji
+    if pred_label == "Relaxed":
+        status_emoji = "😌"
+    elif pred_label == "Moderate Activity":
+        status_emoji = "💪"
+    elif pred_label == "Muscle Fatigue":
+        status_emoji = "😩"
     else:
-        gc = "#94A3B8"; gb = "#F8FAFC"; g_label = "Awaiting…"; g_desc = "ML engine is analysing."
-    v3.markdown(f"""<div class="cg-card" style="border-left:4px solid {gc};background:{gb};">
-        <div class="cg-label">Gait Pattern</div>
-        <div style="font-size:1.3rem;font-weight:800;color:{gc};line-height:1.2;">{g_label}</div>
-        <div class="cg-desc">{g_desc}</div>
-    </div>""", unsafe_allow_html=True)
+        status_emoji = "⚠️"
 
-    # Session time
-    v4.markdown(f"""<div class="cg-card" style="border-left:4px solid #3B82F6;">
-        <div class="cg-label">Session Time</div>
-        <div class="cg-value" style="color:#1D4ED8;font-family:monospace;">{timer_str}</div>
-        <div class="cg-desc">Target: {SESSION_DURATION_MINUTES} min</div>
-    </div>""", unsafe_allow_html=True)
+    # card background based on muscle state
+    if pred_label in ["Muscle Fatigue", "Overexertion"]:
+        status_color = "#FEE2E2"
+        border_color = "#EF4444"
+    elif pred_label == "Moderate Activity":
+        status_color = "#FEF3C7"
+        border_color = "#F59E0B"
+    else:
+        status_color = "#DCFCE7"
+        border_color = "#22C55E"
 
-    # ── Patient feedback ────────────────────────────────────────────────
-    st.markdown("### 💬 Patient Feedback")
-    fb1, fb2 = st.columns(2)
+    st.markdown(f"""
+    <div class="care-card" style="background:{status_color}; border-color:{border_color};">
+        <div style="font-size:3.5rem;">{status_emoji}</div>
+        <div class="care-title">Current Muscle Condition</div>
+        <div class="care-value">{pred_label}</div>
+        <div class="care-desc">{pred_desc}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with fb1:
-        pain = st.slider("Pain Level (0 = no pain, 10 = worst)", 0, 10,
-                         value=st.session_state.get("live_pain", 2), key="caregiver_pain")
-        st.session_state.live_pain = pain
-        pain_bar_color = "#DC2626" if pain >= 7 else "#D97706" if pain >= 5 else "#16A34A"
+    # Two big cards: EMG and Gait
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown(f"""
-        <div style="background:#F1F5F9;border-radius:8px;height:12px;margin-top:4px;overflow:hidden;">
-            <div style="background:{pain_bar_color};width:{pain*10}%;height:12px;border-radius:8px;transition:width 0.3s;"></div>
+        <div class="care-card">
+            <div class="care-title">📈 EMG Signal</div>
+            <div class="care-value" style="color:#2A9D8F;">{latest_emg:.0f}</div>
+            <div class="care-desc">microvolts (µV)</div>
         </div>
-        <div style="font-size:0.8rem;color:{pain_bar_color};font-weight:600;margin-top:4px;">
-            {"🔴 High — report to clinician" if pain >= 7 else "🟡 Moderate — monitor" if pain >= 5 else "🟢 Acceptable"}
-        </div>""", unsafe_allow_html=True)
-
-    with fb2:
-        fatigue = st.slider("Fatigue Level (0 = none, 10 = exhausted)", 0, 10,
-                            value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
-        st.session_state.live_fatigue = fatigue
-        fat_bar_color = "#DC2626" if fatigue >= 7 else "#D97706" if fatigue >= 5 else "#16A34A"
-        st.markdown(f"""
-        <div style="background:#F1F5F9;border-radius:8px;height:12px;margin-top:4px;overflow:hidden;">
-            <div style="background:{fat_bar_color};width:{fatigue*10}%;height:12px;border-radius:8px;transition:width 0.3s;"></div>
-        </div>
-        <div style="font-size:0.8rem;color:{fat_bar_color};font-weight:600;margin-top:4px;">
-            {"🔴 High — suggest rest" if fatigue >= 7 else "🟡 Moderate — monitor" if fatigue >= 5 else "🟢 Acceptable"}
-        </div>""", unsafe_allow_html=True)
-
-    st.divider()
-    # ── Muscle health summary ───────────────────────────────────────────
-    st.markdown("### Muscle Health by Segment")
-    _cg_segs  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-    _cg_pcts  = [65.3, 84.8, 69.8, 93.4, 93.9]
-    _cg_mass  = [1.13, 13.3, 1.21, 5.11, 5.13]
-    _cg_icons = ["💪", "🎯", "💪", "🦵", "🦵"]
-
-    mg1, mg2 = st.columns(2)
-    for i, (seg, pct, mass, icon) in enumerate(zip(_cg_segs, _cg_pcts, _cg_mass, _cg_icons)):
-        col = mg1 if i % 2 == 0 else mg2
-        bc  = "#16A34A" if pct >= 90 else "#DC2626"
-        bb  = "#F0FDF4" if pct >= 90 else "#FEF2F2"
-        st_lbl = "Normal ✅" if pct >= 90 else "Under ⚠️"
-        col.markdown(f"""
-        <div class="cg-card" style="background:{bb};border-left:4px solid {bc};">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="font-size:1.3rem;">{icon}</span>
-                    <span style="font-size:0.9rem;font-weight:700;color:#1E293B;">{seg}</span>
-                </div>
-                <span style="font-size:0.78rem;font-weight:700;color:{bc};">{st_lbl}</span>
-            </div>
-            <div style="background:#E2E8F0;border-radius:20px;height:14px;overflow:hidden;">
-                <div style="background:{bc};width:{pct}%;height:14px;border-radius:20px;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:4px;">
-                <span style="font-size:0.75rem;color:#64748B;">{pct:.1f}% of ideal</span>
-                <span style="font-size:0.75rem;color:#64748B;">{mass} kg</span>
-            </div>
-        </div>""", unsafe_allow_html=True)
-
-    # ── EMG trend ───────────────────────────────────────────────────────
-    with st.expander("📈 Show live EMG trend"):
-        if not tele.empty:
-            st.line_chart(tele.set_index("t")["emg"], height=220, color="#2A9D8F")
+        """, unsafe_allow_html=True)
+    with c2:
+        gait_status = st.session_state.ml_prediction
+        if gait_status == "NORMAL":
+            gait_text = "Normal"
+            gait_icon = "✅"
+            gait_bg = "#DCFCE7"
+            gait_border = "#22C55E"
         else:
-            st.caption("No data yet — start a session to see EMG readings.")
+            gait_text = "Check Needed"
+            gait_icon = "⚠️"
+            gait_bg = "#FEE2E2"
+            gait_border = "#EF4444"
+        st.markdown(f"""
+        <div class="care-card" style="background:{gait_bg}; border-color:{gait_border};">
+            <div style="font-size:2.5rem;">{gait_icon}</div>
+            <div class="care-title">Gait Pattern</div>
+            <div class="care-value">{gait_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.info("ℹ️ Use the START / PAUSE / STOP buttons at the top of the page to control the session. Press Emergency STOP immediately if the patient is in distress.")
+    st.markdown("## Patient Feeling")
+    pain = st.slider("😖 Pain Level", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
+    fatigue = st.slider("😴 Fatigue Level", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
+    st.session_state.live_pain = pain
+    st.session_state.live_fatigue = fatigue
+
+    if pain > 7:
+        st.error("🔴 High pain. Stop therapy and tell the clinician.")
+    elif fatigue > 7:
+        st.warning("🟡 Patient is very tired. Please take a rest.")
+    elif pred_label in ["Muscle Fatigue", "Overexertion"]:
+        st.warning("🟡 Muscle activity is high. Monitor the patient closely.")
+    else:
+        st.success("🟢 Patient condition looks okay.")
+
+    # ===== EXPANDER: LEAN MUSCLE ANALYSIS (collapsible, less intrusive) =====
+    with st.expander("💪 Show Muscle Health by Body Part (detailed)"):
+        st.markdown("""
+        <style>
+            .muscle-card {
+                background: white;
+                border-radius: 16px;
+                padding: 16px;
+                margin-bottom: 14px;
+                border: 1px solid #E2E8F0;
+            }
+            .muscle-title {
+                font-size: 1.2rem;
+                font-weight: 700;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .progress-bar-bg {
+                background-color: #E2E8F0;
+                border-radius: 30px;
+                height: 32px;
+                width: 100%;
+                margin: 10px 0;
+            }
+            .progress-fill {
+                height: 32px;
+                border-radius: 30px;
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                padding-right: 12px;
+                color: white;
+                font-weight: 700;
+                font-size: 1rem;
+            }
+            .muscle-stats {
+                font-size: 0.95rem;
+                color: #475569;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
+        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
+        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
+
+        for seg, pct, mass, icon in zip(segments, percentages, masses, icons):
+            bar_color = "#22C55E" if pct >= 90 else "#EF4444"
+            status_text = "Normal ✅" if pct >= 90 else "Weak ⚠️"
+            st.markdown(f"""
+            <div class="muscle-card">
+                <div class="muscle-title">
+                    <span style="font-size:1.8rem;">{icon}</span>
+                    <span>{seg}</span>
+                    <span style="margin-left: auto; color: {bar_color};">{status_text}</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-fill" style="background-color: {bar_color}; width: {pct}%;">
+                        {pct:.1f}%
+                    </div>
+                </div>
+                <div class="muscle-stats">
+                    Mass: <strong>{mass} kg</strong> &nbsp; (vs ideal)
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.caption("✅ Normal = muscle mass ≥90% of ideal. ⚠️ Weak = below 90%.")
+
+    st.info("Use START, PAUSE, or STOP buttons above. Press Emergency STOP if the patient feels unsafe.")
+
+    with st.expander("📈 Show EMG trend"):
+        if not tele.empty:
+            st.line_chart(tele.set_index("t")["emg"], height=260)
+        else:
+            st.write("No data yet.")
 
 # ==========================================
 # 11. AUTO REFRESH
