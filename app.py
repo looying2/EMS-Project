@@ -1578,16 +1578,33 @@ if user_role == "Doctor":
         
    # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
-        # =====================================================
-        # 1. AI SESSION SUMMARY + CLINICIAN APPROVAL
-        # =====================================================
         if st.session_state.session_summary_text:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("📝 AI Session Summary")
-            st.markdown(st.session_state.session_summary_text)
-            if st.button("Regenerate Summary", key="regenerate_summary"):
-                st.session_state.session_summary_generated = False
-                st.rerun()
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("📝 AI Session Summary")
+    
+    # Correctly format the dictionary
+    summary = st.session_state.session_summary_text
+    if isinstance(summary, dict):
+        # Title
+        st.markdown(f"## {summary.get('title', 'Clinical Session Summary')}")
+        # Summary paragraph
+        st.markdown(summary.get('summary', ''))
+        # Signal Interpretation
+        st.markdown("### Signal Interpretation")
+        for point in summary.get('interpretation', []):
+            st.markdown(f"- {point}")
+        # Recommended Actions
+        st.markdown("### Recommended Actions")
+        for action in summary.get('actions', []):
+            st.markdown(f"- {action}")
+    else:
+        # Fallback in case it's a string (should not happen)
+        st.markdown(summary)
+    
+    if st.button("Regenerate Summary", key="regenerate_summary"):
+        st.session_state.session_summary_generated = False
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
             st.divider()
             st.subheader("🔐 Clinician Approval")
