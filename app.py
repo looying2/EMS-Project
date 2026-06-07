@@ -1574,16 +1574,157 @@ if user_role == "Doctor":
 
         # Session Summary & Progress
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📊 Session Summary & Progress")
+        st.subheader("📊 Session Pain & Fatigue Trends")
+
+        _pr_times  = [0, 5, 10, 15, 20]
+        _pr_pain   = [5, 4, 3, 2, 1]
+        _pr_fatigue = [6, 5, 4, 3, 2]
+
+        # Reference zone helpers
+        def _make_zone(fig, y0, y1, color, label):
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.06,
+                          line_width=0, annotation_text=label,
+                          annotation_position="right", annotation_font_size=9,
+                          annotation_font_color="#94A3B8")
+
         col_p1, col_p2 = st.columns(2)
-        pain_score_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Pain Score': [5, 4, 3, 2, 1]})
-        fatigue_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Fatigue Level': [6, 5, 4, 3, 2]})
+
         with col_p1:
-            st.markdown("**Pain Score Trend**")
-            st.line_chart(pain_score_progress.set_index('Time'), color="#E57373", height=250)
+            _fig_pain = go.Figure()
+            # Filled area under line
+            _fig_pain.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_pain,
+                mode="lines+markers+text",
+                name="Pain Score",
+                line=dict(color="#EF5350", width=3, shape="spline"),
+                marker=dict(size=10, color="#EF5350",
+                            line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(239,83,80,0.08)",
+                text=[str(v) for v in _pr_pain],
+                textposition="top center",
+                textfont=dict(size=11, color="#B71C1C", family="sans-serif"),
+                hovertemplate="<b>%{x} min</b><br>Pain: %{y}/10<extra></extra>"
+            ))
+            # Clinical threshold lines
+            _fig_pain.add_hline(y=7, line_dash="dash", line_color="#EF5350", line_width=1.2,
+                                annotation_text="High (≥7)", annotation_position="right",
+                                annotation_font_size=9, annotation_font_color="#EF5350")
+            _fig_pain.add_hline(y=4, line_dash="dot", line_color="#F4A261", line_width=1.2,
+                                annotation_text="Moderate (≥4)", annotation_position="right",
+                                annotation_font_size=9, annotation_font_color="#F4A261")
+            _make_zone(_fig_pain, 0, 4,   "#16A34A", "")
+            _make_zone(_fig_pain, 4, 7,   "#F4A261", "")
+            _make_zone(_fig_pain, 7, 10,  "#EF5350", "")
+            _fig_pain.update_layout(
+                title=dict(text="Pain Score (0–10)", font=dict(size=13, color="#264653"), x=0),
+                height=260,
+                margin=dict(l=10, r=60, t=36, b=36),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="Session Time (min)", tickvals=_pr_times,
+                    ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                    gridcolor="#F1F5F9", showline=True,
+                    linecolor="#E2E8F0", tickfont=dict(size=10)
+                ),
+                yaxis=dict(
+                    title="Score", range=[0, 10], dtick=2,
+                    gridcolor="#F1F5F9", showline=True,
+                    linecolor="#E2E8F0", tickfont=dict(size=10)
+                ),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_pain, use_container_width=True)
+
+            # Stat strip
+            _p_start, _p_end = _pr_pain[0], _pr_pain[-1]
+            _p_delta = _p_end - _p_start
+            _p_col = "#16A34A" if _p_delta < 0 else "#EF5350" if _p_delta > 0 else "#64748B"
+            _p_arrow = "↓" if _p_delta < 0 else "↑" if _p_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:10px;margin-top:-6px;">
+                <div style="flex:1;background:#FEF2F2;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">START</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:#EF5350;">{_p_start}/10</div>
+                </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">END</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:#16A34A;">{_p_end}/10</div>
+                </div>
+                <div style="flex:1;background:#F8FAFC;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">CHANGE</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:{_p_col};">{_p_arrow} {abs(_p_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
         with col_p2:
-            st.markdown("**Fatigue Level Trend**")
-            st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6", height=250)
+            _fig_fat = go.Figure()
+            _fig_fat.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_fatigue,
+                mode="lines+markers+text",
+                name="Fatigue Level",
+                line=dict(color="#3B82F6", width=3, shape="spline"),
+                marker=dict(size=10, color="#3B82F6",
+                            line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                text=[str(v) for v in _pr_fatigue],
+                textposition="top center",
+                textfont=dict(size=11, color="#1D4ED8", family="sans-serif"),
+                hovertemplate="<b>%{x} min</b><br>Fatigue: %{y}/10<extra></extra>"
+            ))
+            _fig_fat.add_hline(y=7, line_dash="dash", line_color="#3B82F6", line_width=1.2,
+                               annotation_text="High (≥7)", annotation_position="right",
+                               annotation_font_size=9, annotation_font_color="#3B82F6")
+            _fig_fat.add_hline(y=4, line_dash="dot", line_color="#93C5FD", line_width=1.2,
+                               annotation_text="Moderate (≥4)", annotation_position="right",
+                               annotation_font_size=9, annotation_font_color="#93C5FD")
+            _make_zone(_fig_fat, 0, 4,  "#16A34A", "")
+            _make_zone(_fig_fat, 4, 7,  "#3B82F6", "")
+            _make_zone(_fig_fat, 7, 10, "#1D4ED8", "")
+            _fig_fat.update_layout(
+                title=dict(text="Fatigue Level (0–10)", font=dict(size=13, color="#264653"), x=0),
+                height=260,
+                margin=dict(l=10, r=60, t=36, b=36),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="Session Time (min)", tickvals=_pr_times,
+                    ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                    gridcolor="#F1F5F9", showline=True,
+                    linecolor="#E2E8F0", tickfont=dict(size=10)
+                ),
+                yaxis=dict(
+                    title="Level", range=[0, 10], dtick=2,
+                    gridcolor="#F1F5F9", showline=True,
+                    linecolor="#E2E8F0", tickfont=dict(size=10)
+                ),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_fat, use_container_width=True)
+
+            _f_start, _f_end = _pr_fatigue[0], _pr_fatigue[-1]
+            _f_delta = _f_end - _f_start
+            _f_col = "#16A34A" if _f_delta < 0 else "#EF5350" if _f_delta > 0 else "#64748B"
+            _f_arrow = "↓" if _f_delta < 0 else "↑" if _f_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:10px;margin-top:-6px;">
+                <div style="flex:1;background:#EFF6FF;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">START</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:#3B82F6;">{_f_start}/10</div>
+                </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">END</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:#16A34A;">{_f_end}/10</div>
+                </div>
+                <div style="flex:1;background:#F8FAFC;border-radius:8px;padding:8px 12px;text-align:center;">
+                    <div style="font-size:0.68rem;font-weight:600;color:#94A3B8;letter-spacing:0.05em;">CHANGE</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:{_f_col};">{_f_arrow} {abs(_f_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        # keep these defined for generate_report()
+        pain_score_progress = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Pain Score': _pr_pain})
+        fatigue_progress    = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Fatigue Level': _pr_fatigue})
         st.markdown("**Muscle Activation (EMG) — Last 20-Min Session**")
 
         _emg_mins   = [0.0, 0.03, 0.07, 0.1, 0.13, 0.17, 0.2, 0.23, 0.27, 0.3, 0.33, 0.37, 0.4, 0.43, 0.47, 0.5, 0.53, 0.57, 0.6, 0.63, 0.67, 0.7, 0.73, 0.77, 0.8, 0.83, 0.87, 0.9, 0.93, 0.97, 1.0, 1.03, 1.07, 1.1, 1.13, 1.17, 1.2, 1.23, 1.27, 1.3, 1.33, 1.37, 1.4, 1.43, 1.47, 1.5, 1.53, 1.57, 1.6, 1.63, 1.67, 1.7, 1.73, 1.77, 1.8, 1.83, 1.87, 1.9, 1.93, 1.97, 2.0, 2.03, 2.07, 2.1, 2.13, 2.17, 2.2, 2.23, 2.27, 2.3, 2.33, 2.37, 2.4, 2.43, 2.47, 2.5, 2.53, 2.57, 2.6, 2.63, 2.67, 2.7, 2.73, 2.77, 2.8, 2.83, 2.87, 2.9, 2.93, 2.97, 3.0, 3.03, 3.07, 3.1, 3.13, 3.17, 3.2, 3.23, 3.27, 3.3, 3.33, 3.37, 3.4, 3.43, 3.47, 3.5, 3.53, 3.57, 3.6, 3.63, 3.67, 3.7, 3.73, 3.77, 3.8, 3.83, 3.87, 3.9, 3.93, 3.97, 4.0, 4.03, 4.07, 4.1, 4.13, 4.17, 4.2, 4.23, 4.27, 4.3, 4.33, 4.37, 4.4, 4.43, 4.47, 4.5, 4.53, 4.57, 4.6, 4.63, 4.67, 4.7, 4.73, 4.77, 4.8, 4.83, 4.87, 4.9, 4.93, 4.97, 5.0, 5.03, 5.07, 5.1, 5.13, 5.17, 5.2, 5.23, 5.27, 5.3, 5.33, 5.37, 5.4, 5.43, 5.47, 5.5, 5.53, 5.57, 5.6, 5.63, 5.67, 5.7, 5.73, 5.77, 5.8, 5.83, 5.87, 5.9, 5.93, 5.97, 6.02, 6.05, 6.08, 6.12, 6.15, 6.18, 6.22, 6.25, 6.28, 6.32, 6.35, 6.38, 6.42, 6.45, 6.48, 6.52, 6.55, 6.58, 6.62, 6.65, 6.68, 6.72, 6.75, 6.78, 6.82, 6.85, 6.88, 6.92, 6.95, 6.98, 7.02, 7.05, 7.08, 7.12, 7.15, 7.18, 7.22, 7.25, 7.28, 7.32, 7.35, 7.38, 7.42, 7.45, 7.48, 7.52, 7.55, 7.58, 7.62, 7.65, 7.68, 7.72, 7.75, 7.78, 7.82, 7.85, 7.88, 7.92, 7.95, 7.98, 8.02, 8.05, 8.08, 8.12, 8.15, 8.18, 8.22, 8.25, 8.28, 8.32, 8.35, 8.38, 8.42, 8.45, 8.48, 8.52, 8.55, 8.58, 8.62, 8.65, 8.68, 8.72, 8.75, 8.78, 8.82, 8.85, 8.88, 8.92, 8.95, 8.98, 9.02, 9.05, 9.08, 9.12, 9.15, 9.18, 9.22, 9.25, 9.28, 9.32, 9.35, 9.38, 9.42, 9.45, 9.48, 9.52, 9.55, 9.58, 9.62, 9.65, 9.68, 9.72, 9.75, 9.78, 9.82, 9.85, 9.88, 9.92, 9.95, 9.98, 10.02, 10.05, 10.08, 10.12, 10.15, 10.18, 10.22, 10.25, 10.28, 10.32, 10.35, 10.38, 10.42, 10.45, 10.48, 10.52, 10.55, 10.58, 10.62, 10.65, 10.68, 10.72, 10.75, 10.78, 10.82, 10.85, 10.88, 10.92, 10.95, 10.98, 11.02, 11.05, 11.08, 11.12, 11.15, 11.18, 11.22, 11.25, 11.28, 11.32, 11.35, 11.38, 11.42, 11.45, 11.48, 11.52, 11.55, 11.58, 11.62, 11.65, 11.68, 11.72, 11.75, 11.78, 11.82, 11.85, 11.88, 11.92, 11.95, 11.98, 12.02, 12.05, 12.08, 12.12, 12.15, 12.18, 12.22, 12.25, 12.28, 12.32, 12.35, 12.38, 12.42, 12.45, 12.48, 12.52, 12.55, 12.58, 12.62, 12.65, 12.68, 12.72, 12.75, 12.78, 12.82, 12.85, 12.88, 12.92, 12.95, 12.98, 13.02, 13.05, 13.08, 13.12, 13.15, 13.18, 13.22, 13.25, 13.28, 13.32, 13.35, 13.38, 13.42, 13.45, 13.48, 13.52, 13.55, 13.58, 13.62, 13.65, 13.68, 13.72, 13.75, 13.78, 13.82, 13.85, 13.88, 13.92, 13.95, 13.98, 14.02, 14.05, 14.08, 14.12, 14.15, 14.18, 14.22, 14.25, 14.28, 14.32, 14.35, 14.38, 14.42, 14.45, 14.48, 14.52, 14.55, 14.58, 14.62, 14.65, 14.68, 14.72, 14.75, 14.78, 14.82, 14.85, 14.88, 14.92, 14.95, 14.98, 15.02, 15.05, 15.08, 15.12, 15.15, 15.18, 15.22, 15.25, 15.28, 15.32, 15.35, 15.38, 15.42, 15.45, 15.48, 15.52, 15.55, 15.58, 15.62, 15.65, 15.68, 15.72, 15.75, 15.78, 15.82, 15.85, 15.88, 15.92, 15.95, 15.98, 16.02, 16.05, 16.08, 16.12, 16.15, 16.18, 16.22, 16.25, 16.28, 16.32, 16.35, 16.38, 16.42, 16.45, 16.48, 16.52, 16.55, 16.58, 16.62, 16.65, 16.68, 16.72, 16.75, 16.78, 16.82, 16.85, 16.88, 16.92, 16.95, 16.98, 17.02, 17.05, 17.08, 17.12, 17.15, 17.18, 17.22, 17.25, 17.28, 17.32, 17.35, 17.38, 17.42, 17.45, 17.48, 17.52, 17.55, 17.58, 17.62, 17.65, 17.68, 17.72, 17.75, 17.78, 17.82, 17.85, 17.88, 17.92, 17.95, 17.98, 18.02, 18.05, 18.08, 18.12, 18.15, 18.18, 18.22, 18.25, 18.28, 18.32, 18.35, 18.38, 18.42, 18.45, 18.48, 18.52, 18.55, 18.58, 18.62, 18.65, 18.68, 18.72, 18.75, 18.78, 18.82, 18.85, 18.88, 18.92, 18.95, 18.98, 19.02, 19.05, 19.08, 19.12, 19.15, 19.18, 19.22, 19.25, 19.28, 19.32, 19.35, 19.38, 19.42, 19.45, 19.48, 19.52, 19.55, 19.58, 19.62, 19.65, 19.68, 19.72, 19.75, 19.78, 19.82, 19.85, 19.88, 19.92, 19.95, 19.98]
