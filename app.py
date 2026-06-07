@@ -89,6 +89,16 @@ def fb_set_user_profile(uid, role, display_name=""):
 def do_login(email, password):
     try:
         user = auth.sign_in_with_email_and_password(email, password)
+        # Check email verified via Firebase Auth REST
+        id_token = user["idToken"]
+        info_url = (
+            "https://identitytoolkit.googleapis.com/v1/accounts:lookup"
+            f"?key={firebase_config['apiKey']}"
+        )
+        resp = requests.post(info_url, json={"idToken": id_token}, timeout=5)
+        user_info = resp.json().get("users", [{}])[0]
+        if not user_info.get("emailVerified", False):
+            return None, "EMAIL_NOT_VERIFIED"
         return user, None
     except Exception as e:
         msg = str(e)
@@ -106,6 +116,8 @@ def do_register(email, password, role, display_name):
         user = auth.create_user_with_email_and_password(email, password)
         uid = user["localId"]
         fb_set_user_profile(uid, role, display_name)
+        # Send verification email immediately after account creation
+        auth.send_email_verification(user["idToken"])
         return user, None
     except Exception as e:
         msg = str(e)
@@ -116,7 +128,16 @@ def do_register(email, password, role, display_name):
         elif "INVALID_EMAIL" in msg:
             return None, "Invalid email address format."
         else:
-            return None, "Registration failed. Please try again." 
+            return None, "Registration failed. Please try again."
+
+def resend_verification(email, password):
+    """Re-sign in silently to get a fresh token, then resend verification email."""
+    try:
+        user = auth.sign_in_with_email_and_password(email, password)
+        auth.send_email_verification(user["idToken"])
+        return True
+    except Exception:
+        return False
 
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
@@ -802,7 +823,17 @@ if st.session_state.auth_user is None:
                 else:
                     with st.spinner("Signing in..."):
                         _user, _err = do_login(_li_email.strip(), _li_pw)
-                    if _err:
+                    if _err == "EMAIL_NOT_VERIFIED":
+                        st.warning(
+                            "Your email is not verified yet. "
+                            "Check your inbox for the verification link."
+                        )
+                        if st.button("Resend verification email", key="resend_btn"):
+                            if resend_verification(_li_email.strip(), _li_pw):
+                                st.success("Verification email resent! Check your inbox.")
+                            else:
+                                st.error("Could not resend — check your password.")
+                    elif _err:
                         st.error(_err)
                     else:
                         _uid  = _user["localId"]
@@ -907,8 +938,22 @@ if st.session_state.auth_user is None:
                         st.error(_err)
                     else:
                         st.success(
-                            f"Account created as {_reg_role}. "
-                            f"Switch to the Sign In tab to log in.")
+                            f"Account created as {_reg_role}! "
+                            f"A verification email has been sent to {_reg_email.strip()}. "
+                            f"Please verify before signing in."
+                        )
+                        st.markdown("""
+                        <div style="background:#FEF9C3;border:1px solid #FDE68A;border-radius:10px;
+                                    padding:12px 16px;margin-top:8px;">
+                            <div style="font-size:0.82rem;font-weight:700;color:#92400E;margin-bottom:4px;">
+                                📧 Check your inbox
+                            </div>
+                            <div style="font-size:0.78rem;color:#78350F;line-height:1.6;">
+                                1. Open the verification email from Firebase / noreply@ems-project-7ea46.firebaseapp.com<br>
+                                2. Click the <b>Verify Email</b> link<br>
+                                3. Come back here and sign in
+                            </div>
+                        </div>""", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("""
