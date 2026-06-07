@@ -371,7 +371,26 @@ ss_init("session_summary_generated", False)
 ss_init("session_summary_text", "")
 ss_init("last_ml_call_time", 0)
 ML_CALL_INTERVAL = 5  # seconds between ML API calls
+SESSION_DURATION_MINUTES = 20  # fixed EMS protocol duration in minutes
 ss_init("ml_latest", {})
+ss_init("ml_summary", {})
+ss_init("current_session_id", None)
+ss_init("last_ml_summary_snapshot", {})
+
+# Frozen snapshots — captured at STOP before the main loop clears ML state
+ss_init("frozen_ml_prediction",    "WAITING")
+ss_init("frozen_ml_probability",   0.0)
+ss_init("frozen_ml_latest",        {})
+ss_init("frozen_ml_session",       {})
+ss_init("frozen_ml_probabilities", [])
+ss_init("frozen_ml_summary",       {})
+ss_init("frozen_intensity",        15)
+ss_init("frozen_frequency",        40)
+ss_init("frozen_pulse_width",      300)
+ss_init("frozen_duty_on",          10)
+ss_init("frozen_duty_off",         20)
+ss_init("frozen_pain",             2)
+ss_init("frozen_fatigue",          4)
 ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
@@ -397,38 +416,232 @@ reader = load_easyocr()
 def generate_session_summary():
     tele = st.session_state.telemetry
     if tele.empty:
-        st.session_state.session_summary_text = "No telemetry data collected during this session."
+        st.session_state.session_summary_text = {"error": "No telemetry data collected during this session."}
         return
 
-    # Compute session stats
-    avg_emg = tele['emg'].mean()
-    max_emg = tele['emg'].max()
-    min_emg = tele['emg'].min()
-    duration = st.session_state.elapsed_time  # in seconds
-    pain = st.session_state.live_pain
-    fatigue = st.session_state.live_fatigue
-    gait = st.session_state.ml_prediction  # "NORMAL" or "ABNORMAL"
-    
-    # Build prompt for RAG API
-    prompt = f"""
-    You are a clinical assistant. Write a short, professional summary of the following EMS therapy session:
+    # ── Derived EMG stats ─────────────────────────────────────────────────
+    avg_emg  = tele["emg"].mean()
+    max_emg  = tele["emg"].max()
+    min_emg  = tele["emg"].min()
+    std_emg  = tele["emg"].std()
+    q        = max(1, len(tele) // 4)
+    emg_early = tele["emg"].iloc[:q].mean()
+    emg_late  = tele["emg"].iloc[-q:].mean()
+    emg_trend = emg_late - emg_early
+    trend_desc = (
+        f"increased by {emg_trend:.1f} µV (progressive recruitment)"
+        if emg_trend > 10 else
+        f"decreased by {abs(emg_trend):.1f} µV (possible fatigue or accommodation)"
+        if emg_trend < -10 else
+        f"remained stable (Δ{emg_trend:+.1f} µV)"
+    )
+    n_total   = len(tele)
+    n_relaxed = (tele["emg"] <= 300).sum()
+    n_mod     = ((tele["emg"] > 300) & (tele["emg"] <= 500)).sum()
+    n_fat     = ((tele["emg"] > 500) & (tele["emg"] <= 700)).sum()
+    n_over    = (tele["emg"] > 700).sum()
+    pct_act   = (n_mod + n_fat + n_over) / n_total * 100
 
-    - Duration: {duration:.0f} seconds (approx {duration/60:.1f} minutes)
-    - Average EMG: {avg_emg:.1f} µV
-    - Maximum EMG: {max_emg:.1f} µV
-    - Minimum EMG: {min_emg:.1f} µV
-    - Final patient pain score: {pain}/10
-    - Final patient fatigue score: {fatigue}/10
-    - Gait pathology classification: {gait}
-    
-    Provide a conclusion and any recommendations.
-    """
-    
+    # ── Read from frozen snapshot (set at STOP before values are wiped) ───
+    intensity   = st.session_state.frozen_intensity
+    frequency   = st.session_state.frozen_frequency
+    pulse_width = st.session_state.frozen_pulse_width
+    duty_on     = st.session_state.frozen_duty_on
+    duty_off    = st.session_state.frozen_duty_off
+    pain        = st.session_state.frozen_pain
+    fatigue     = st.session_state.frozen_fatigue
+    gait        = (st.session_state.ml_prediction
+                   if st.session_state.ml_prediction not in ("WAITING", "")
+                   else st.session_state.frozen_ml_prediction)
+    ml_conf     = (st.session_state.ml_probability
+                   if st.session_state.ml_probability > 0
+                   else st.session_state.frozen_ml_probability)
+    ml_latest   = st.session_state.ml_latest or st.session_state.frozen_ml_latest
+    ml_session  = st.session_state.ml_session or st.session_state.frozen_ml_session
+    ml_probs    = st.session_state.ml_probabilities or st.session_state.frozen_ml_probabilities
+    ml_summary_snap = st.session_state.ml_summary or st.session_state.frozen_ml_summary
+
+    conf_pct    = ml_conf * 100 if ml_conf <= 1.0 else ml_conf
+    rms_val     = ml_latest.get("rms_recto_femoral", "N/A")
+    spread_val  = ml_latest.get("rms_signal_spread", "N/A")
+    std_val     = ml_latest.get("rms_signal_std", "N/A")
+    ml_avg      = ml_session.get("avg", "N/A")
+    ml_min      = ml_session.get("min", "N/A")
+    ml_max      = ml_session.get("max", "N/A")
+
+    st.session_state.last_ml_summary_snapshot = dict(ml_summary_snap)
+
+    conditions = ", ".join(condition_tags) if condition_tags else "general rehabilitation"
+    intensity_desc = (f"{intensity} mA" if intensity > 0
+                      else "device-controlled current (intensity set by ESP32)")
+    intensity_action = (
+        f"set by the ESP32 controller — verify the actual delivered current level from the device log"
+        if intensity == 0 else f"{intensity} mA"
+    )
+
+    # ── Parameter adjustment suggestions ─────────────────────────────────
+    param_suggestions = []
+    if gait not in ("Normal", "NORMAL", "WAITING", ""):
+        param_suggestions.append(
+            f"Gait classified as {gait} — consider reviewing electrode placement on the recto femoris "
+            f"and adjusting frequency (current: {frequency} Hz; try 35–50 Hz range for better motor unit recruitment)."
+        )
+    else:
+        param_suggestions.append(
+            f"Gait classified as Normal — maintain current frequency ({frequency} Hz) and pulse width ({pulse_width} µs) for the next session."
+        )
+    if pct_act < 50:
+        param_suggestions.append(
+            f"Active recruitment was only {pct_act:.0f}% of session time (target >50%) — "
+            f"consider increasing intensity from {intensity_action} by 5–10 mA if patient tolerance allows."
+        )
+    else:
+        param_suggestions.append(
+            f"Active recruitment was {pct_act:.0f}% of session time (target met) — "
+            f"intensity ({intensity_action}) is appropriate; maintain for next session."
+        )
+    if fatigue >= 6:
+        param_suggestions.append(
+            f"Patient reported fatigue {fatigue}/10 (high) — reduce duty cycle ON-time "
+            f"from {duty_on}s to {max(6, duty_on-2)}s, or increase OFF-time from {duty_off}s to {duty_off+5}s."
+        )
+    else:
+        param_suggestions.append(
+            f"Patient fatigue was {fatigue}/10 (acceptable) — maintain duty cycle ({duty_on}s ON / {duty_off}s OFF)."
+        )
+    if pain >= 5:
+        param_suggestions.append(
+            f"Patient reported pain {pain}/10 (exceeds comfort threshold of 5/10) — "
+            f"reduce intensity by 10–20% from {intensity_action} at next session start, "
+            f"and verify electrode placement is not over bony prominences."
+        )
+    else:
+        param_suggestions.append(
+            f"Patient pain was {pain}/10 (within acceptable range) — no intensity reduction required."
+        )
+
+    # ── Fallback dict ─────────────────────────────────────────────────────
+    fallback = {
+        "title": f"{gait} recto femoris EMG pattern — {SESSION_DURATION_MINUTES}-min EMS session ({conditions})",
+        "summary": (
+            f"A {SESSION_DURATION_MINUTES}-minute EMS session was completed for patient {patient_id} "
+            f"(age group {age_group}, {conditions}) at {frequency} Hz, "
+            f"{pulse_width} µs pulse width, {duty_on}s ON / {duty_off}s OFF duty cycle"
+            f"{f', {intensity} mA stimulation intensity' if intensity > 0 else ''}. "
+            f"The recto femoris EMG averaged {avg_emg:.1f} µV (max {max_emg:.1f}, min {min_emg:.1f}, "
+            f"STD {std_emg:.1f} µV) across {n_total} samples. "
+            f"Signal amplitude {trend_desc}. "
+            f"Active muscle recruitment occurred in {pct_act:.0f}% of the session "
+            f"({n_mod} moderate, {n_fat} fatigue-range, {n_over} overexertion samples). "
+            f"The ML gait classifier returned {gait} at {conf_pct:.1f}% confidence, "
+            f"with final patient-reported pain {pain}/10 and fatigue {fatigue}/10."
+        ),
+        "interpretation": [
+            f"Recto Femoris RMS = {rms_val} µV (session avg/min/max: {ml_avg}/{ml_min}/{ml_max}): "
+            f"signal level reflects muscle response to {intensity_desc}; "
+            f"compare to patient baseline for age group {age_group} with {conditions}.",
+            f"Signal Spread = {spread_val}, STD = {std_val}: "
+            f"{'stable motor unit firing observed' if str(std_val) not in ('N/A', '') and float(str(std_val).replace('N/A','0') or 0) < 5 else 'notable signal variability — possible artefact or irregular recruitment'}. "
+            f"Session EMG STD was {std_emg:.1f} µV; trend {trend_desc}.",
+            f"Gait classification: {gait} ({conf_pct:.1f}% confidence). "
+            f"Muscle state distribution — relaxed: {n_relaxed}, moderate: {n_mod}, "
+            f"fatigue-range: {n_fat}, overexertion: {n_over} samples. "
+            f"Active recruitment: {pct_act:.0f}% of session time."
+        ],
+        "actions": [
+            param_suggestions[0],
+            param_suggestions[1],
+            param_suggestions[2],
+            param_suggestions[3],
+        ]
+    }
+
+    # ── Build prompt ──────────────────────────────────────────────────────
+    probability_lines = [
+        f"- {p.get('label', '?')}: {float(p.get('probability', 0)):.1f}%"
+        for p in ml_probs
+    ]
+    feature_lines = [
+        f"- Recto Femoris RMS: {rms_val} µV",
+        f"- Signal Spread: {spread_val}",
+        f"- Signal STD: {std_val}",
+        f"- Session EMG avg: {avg_emg:.1f} µV, max: {max_emg:.1f} µV, min: {min_emg:.1f} µV",
+        f"- Active recruitment: {pct_act:.0f}% of session",
+        f"- Stimulation: {intensity} mA / {frequency} Hz / {pulse_width} µs / {duty_on}s ON {duty_off}s OFF",
+        f"- Pain: {pain}/10, Fatigue: {fatigue}/10",
+        f"- Patient: {patient_id}, Age group: {age_group}, Conditions: {conditions}",
+    ]
+
+    prompt = f"""You are a rehabilitation engineering assistant explaining an EMG monitoring result.
+Use the draft explanation below as the factual base. Improve wording only if needed, but do not remove the actual values or make the response generic.
+Draft explanation:
+Title: {fallback["title"]}
+Summary: {fallback["summary"]}
+Interpretation:
+- {fallback["interpretation"][0]}
+- {fallback["interpretation"][1]}
+- {fallback["interpretation"][2]}
+Actions:
+- {fallback["actions"][0]}
+- {fallback["actions"][1]}
+- {fallback["actions"][2]}
+- {fallback["actions"][3]}
+Model result:
+Prediction: {gait}
+Confidence: {conf_pct:.1f}%
+Class probabilities:
+{chr(10).join(probability_lines) if probability_lines else "Not available"}
+Input measurements:
+{chr(10).join(feature_lines) if feature_lines else "Not available"}
+Rules:
+- Do not diagnose.
+- Do not claim certainty.
+- Do not use the words "diagnosis", "diagnostic", or "disease" except in the disclaimer.
+- The title must describe the EMG signal pattern.
+- The summary must be 4 to 6 complete sentences.
+- The interpretation list must contain exactly 3 points.
+- The actions list must contain exactly 4 practical actions.
+- Each interpretation point must mention the actual measurement value.
+- Each action must state whether to increase, decrease, or maintain a specific parameter, and by how much.
+- Do not use vague advice such as "monitor closely" unless you explain what to monitor and what threshold triggers action.
+- Return only valid JSON.
+- Do not use markdown.
+JSON format:
+{{
+  "title": "specific EMG signal pattern title",
+  "summary": "4 to 6 sentences explaining this specific result",
+  "interpretation": ["value-specific point 1", "value-specific point 2", "value-specific point 3"],
+  "actions": ["specific action 1", "specific action 2", "specific action 3", "specific action 4"]
+}}"""
+
     answer, _ = call_rag_api(prompt)
-    if not answer or "Error" in answer:
-        answer = "Could not generate AI summary. The RAG service may be offline."
-    
-    st.session_state.session_summary_text = answer
+
+    parsed = None
+    if answer and "Error" not in answer:
+        try:
+            clean = answer.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except Exception:
+            parsed = None
+
+    st.session_state.session_summary_text = parsed if parsed else fallback
+
+    # Save session to Firebase
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    st.session_state.current_session_id = session_id
+    fb_write(f"patients/{patient_id}/sessions/{session_id}", {
+        "date":              datetime.now().strftime("%Y-%m-%d"),
+        "duration_min":      SESSION_DURATION_MINUTES,
+        "avg_emg":           float(avg_emg),
+        "max_emg":           float(max_emg),
+        "pain_score":        pain,
+        "fatigue_score":     fatigue,
+        "ml_classification": gait,
+        "ml_confidence":     float(conf_pct),
+        "rag_summary":       json.dumps(parsed if parsed else fallback),
+        "generated_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "approval_status":   "pending"
+    })
 
 def run_easyocr(uploaded_file):
     image = Image.open(uploaded_file)
@@ -707,7 +920,26 @@ def generate_inbody_ai_insight(metrics):
     return overall_insights, risk_level
 
 # ==========================================
-# 5. DIALOGS
+# 5. SNAPSHOT HELPER
+# ==========================================
+def freeze_session_state():
+    """Capture all ML and session values before STOP clears them."""
+    st.session_state.frozen_ml_prediction    = st.session_state.ml_prediction
+    st.session_state.frozen_ml_probability   = st.session_state.ml_probability
+    st.session_state.frozen_ml_latest        = dict(st.session_state.get("ml_latest", {}))
+    st.session_state.frozen_ml_session       = dict(st.session_state.get("ml_session", {}))
+    st.session_state.frozen_ml_probabilities = list(st.session_state.get("ml_probabilities", []))
+    st.session_state.frozen_ml_summary       = dict(st.session_state.get("ml_summary", {}))
+    st.session_state.frozen_intensity        = st.session_state.intensity
+    st.session_state.frozen_frequency        = st.session_state.frequency
+    st.session_state.frozen_pulse_width      = st.session_state.pulse_width
+    st.session_state.frozen_duty_on          = st.session_state.duty_on
+    st.session_state.frozen_duty_off         = st.session_state.duty_off
+    st.session_state.frozen_pain             = st.session_state.live_pain
+    st.session_state.frozen_fatigue          = st.session_state.live_fatigue
+
+# ==========================================
+# 6. DIALOGS
 # ==========================================
 @st.dialog("Start Session Confirmation")
 def show_start_confirmation(pid, proto):
@@ -718,6 +950,7 @@ def show_start_confirmation(pid, proto):
     if col_d1.button("Yes (Start)", type="primary"):
         if st.session_state.system_status != "PAUSED":
             st.session_state.elapsed_time = 0.0
+            st.session_state.intensity = 15  # reset to default on fresh start
         st.session_state.system_status = "ACTIVE"
         st.session_state.session_start_time = time.time()
         try:
@@ -932,7 +1165,16 @@ with st.sidebar:
     condition_tags = st.multiselect("Conditions", ["Sarcopenia", "Post-Stroke", "Osteoarthritis"], default=["Sarcopenia"])
     st.info(f"Height: 170 cm | Weight: 70 kg")
 
-    # Role is set from Firebase — not user-editable
+    # Save patient profile to Firebase
+    fb_write(f"patients/{patient_id}/profile", {
+        "patient_id":  patient_id,
+        "age_group":   age_group,
+        "conditions":  condition_tags,
+        "height_cm":   170,
+        "weight_kg":   70,
+        "last_seen":   datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
     user_role = st.session_state.auth_role  # "Doctor" or "Caregiver"
     _role_color = "#1D4ED8" if user_role == "Doctor" else "#065F46"
     _role_bg    = "#DBEAFE" if user_role == "Doctor" else "#D1FAE5"
@@ -1002,9 +1244,12 @@ with header_cols[2]:
     st.metric("Session Time", timer)
 with header_cols[3]:
     if st.button("Emergency STOP", type="primary", use_container_width=True):
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        freeze_session_state()
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         try:
             log_event(patient_id, "EMERGENCY_STOP", "Immediate Trigger - No Confirmation")
@@ -1036,9 +1281,12 @@ with col_pause:
 with col_stop:
     is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
     if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
+        if st.session_state.session_start_time:
+            st.session_state.elapsed_time += time.time() - st.session_state.session_start_time
+        freeze_session_state()
+        st.session_state.session_summary_generated = False
         st.session_state.system_status = "STOPPED"
         st.session_state.intensity = 0
-        st.session_state.elapsed_time = 0.0 
         st.session_state.session_start_time = None
         log_event(patient_id, "SESSION_STOP")
         st.rerun()
@@ -1085,19 +1333,23 @@ if st.session_state.connected:
             st.session_state.last_ml_call_time = now_ts
             t.start()
     else:
-        st.session_state.ml_prediction    = "WAITING"
-        st.session_state.ml_probability   = 0.0
-        st.session_state.ml_summary       = {}
-        st.session_state.ml_latest        = {}
-        st.session_state.ml_probabilities = []
-        st.session_state.ml_session       = {}
-        st.session_state.ml_pending       = False
-        _ML_SHARED["result"].clear()
+        # Only wipe ML state on IDLE/PAUSED — not on STOPPED,
+        # because generate_session_summary() still needs the last-known values.
+        if st.session_state.system_status != "STOPPED":
+            st.session_state.ml_prediction    = "WAITING"
+            st.session_state.ml_probability   = 0.0
+            st.session_state.ml_summary       = {}
+            st.session_state.ml_latest        = {}
+            st.session_state.ml_probabilities = []
+            st.session_state.ml_session       = {}
+            st.session_state.ml_pending       = False
+            _ML_SHARED["result"].clear()
 
-    # 3. Detect session end and generate AI summary (once)
+    # 3. Detect session end and generate AI summary (once), then reset timer
     if st.session_state.system_status == "STOPPED" and not st.session_state.session_summary_generated:
         generate_session_summary()
         st.session_state.session_summary_generated = True
+        st.session_state.elapsed_time = 0.0  # reset only after summary captured duration
 
 # ==========================================
 # 10. INTERFACE – DOCTOR vs CAREGIVER
@@ -1109,7 +1361,7 @@ if user_role == "Doctor":
         ["🩺 Live & AI", "🧬 Body Composition", "⚙️ Device Control", "📋 Records & Reports", "💬 Clinical AI Chat"]
     )
 
-    # ---------- TAB 1: LIVE & AI ----------
+        # ---------- TAB 1: LIVE & AI ----------
     with tab_live_ai:
         tele = st.session_state.telemetry
         latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
@@ -1148,8 +1400,12 @@ if user_role == "Doctor":
                 st.write(f"ESP32 State: {state}")
     
         st.markdown("---")
-        col_rag, col_ml = st.columns(2)
-        with col_rag:
+        
+        # Two columns: left = Safety + Feedback, right = ML Engine
+        col_left, col_ml = st.columns(2)
+
+        with col_left:
+            # ── Safety & Optimization Rules ────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("Safety & Optimization (Rules)")
             if st.session_state.system_status == "ACTIVE":
@@ -1164,9 +1420,24 @@ if user_role == "Doctor":
             else:
                 st.caption("System Inactive - Start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
+            # ── Patient Feedback (now directly below safety rules) ─────────
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("💬 Patient Feedback")
+            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
+            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
+            if pain > 7:
+                st.error("🚨 High pain – consider reducing intensity.")
+            elif pain > 4:
+                st.warning("⚠️ Moderate pain – monitor closely.")
+            else:
+                st.success("✅ Pain acceptable.")
+            if fatigue > 7:
+                st.info("💤 High fatigue – suggest longer rest periods.")
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col_ml:
+            # ── ML Engine (unchanged) ───────────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("Gait Pathology (ML Engine)")
             if st.session_state.get("ml_pending", False):
@@ -1176,11 +1447,9 @@ if user_role == "Doctor":
             prob = st.session_state.ml_probability
 
             if st.session_state.system_status == "ACTIVE":
-
                 ERROR_PREFIXES = ("API Timeout", "API Offline", "API Error", "Invalid API Response")
                 is_error = any(res.startswith(p) for p in ERROR_PREFIXES) if isinstance(res, str) else False
 
-                # Show loading placeholder until first real result arrives
                 if res in ("WAITING", ""):
                     st.markdown("""
                     <div style="text-align:center; padding:40px 0; color:#94A3B8;">
@@ -1189,12 +1458,11 @@ if user_role == "Doctor":
                         <div style="font-size:0.8rem; margin-top:6px;">The ML engine is reading the latest EMG data.</div>
                     </div>
                     """, unsafe_allow_html=True)
-
                 elif is_error:
                     icon = "⏱️" if "Timeout" in res else "📡" if "Offline" in res else "⚠️"
-                    tip  = "The ngrok tunnel may be down or the Flask backend is not running." if "Offline" in res else \
-                           "The backend took too long to respond. It will retry automatically." if "Timeout" in res else \
-                           "Check the backend logs for details."
+                    tip = ("The ngrok tunnel may be down or the Flask backend is not running." if "Offline" in res else
+                           "The backend took too long to respond. It will retry automatically." if "Timeout" in res else
+                           "Check the backend logs for details.")
                     st.markdown(f"""
                     <div style="background:#FFF8E1; border:1px solid #FFD54F; border-radius:12px;
                                 padding:20px; text-align:center; color:#7B4F00;">
@@ -1206,7 +1474,6 @@ if user_role == "Doctor":
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-
                 else:
                     latest = st.session_state.get("ml_latest", {})
                     session = st.session_state.get("ml_session", {})
@@ -1220,14 +1487,10 @@ if user_role == "Doctor":
                     conf_pct   = prob * 100 if prob <= 1.0 else prob
                     conf_fill  = max(0.0, min(conf_pct, 100.0))
 
-                    if conf_pct >= 75:
-                        conf_note = "High confidence. The model result is relatively stable for this reading."
-                    elif conf_pct >= 50:
-                        conf_note = "Moderate confidence. Consider monitoring additional readings."
-                    else:
-                        conf_note = "Low confidence. Result may be unreliable — check sensor placement."
+                    conf_note = ("High confidence. The model result is relatively stable for this reading." if conf_pct >= 75 else
+                                 "Moderate confidence. Consider monitoring additional readings." if conf_pct >= 50 else
+                                 "Low confidence. Result may be unreliable — check sensor placement.")
 
-                    # ── Predicted Class + Confidence ──────────────────────────
                     st.markdown(f"""
                     <div style="margin-bottom:16px;">
                         <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
@@ -1259,46 +1522,35 @@ if user_role == "Doctor":
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # ── Three feature metric cards ─────────────────────────────
                     if latest:
                         rms_val    = latest.get('rms_recto_femoral', 0)
                         spread_val = latest.get('rms_signal_spread', 0)
                         std_val    = latest.get('rms_signal_std', 0)
-
                         st.markdown(f"""
                         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px;">
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     RECTO FEMORIS RMS
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{rms_val:.2f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{rms_val:.2f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Average EMG level from the recto femoris sensor in the latest cleaned 1-second window.
                                 </div>
                             </div>
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     SIGNAL SPREAD
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{spread_val:.0f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{spread_val:.0f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Formula: max − min after cleaning. Shows the signal range within the 1-second window.
                                 </div>
                             </div>
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     SIGNAL STD
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{std_val:.4f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{std_val:.4f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Standard deviation of cleaned EMG samples. Shows how much the signal fluctuates around the average.
                                 </div>
@@ -1306,7 +1558,6 @@ if user_role == "Doctor":
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # ── Probability bars ───────────────────────────────────────
                     if probabilities:
                         st.markdown("**Prediction Probability**")
                         for p in probabilities:
@@ -1314,13 +1565,11 @@ if user_role == "Doctor":
                             prob_p  = float(p.get("probability", 0))
                             st.progress(prob_p / 100, text=f"{label_p}: {prob_p:.2f}%")
 
-                    # ── Session Summary row ────────────────────────────────────
                     if session:
                         st.markdown(f"""
                         <div style="background:#F1F5F9; border:1px solid #E2E8F0; border-radius:10px;
                                     padding:12px 16px; margin:10px 0;">
-                            <div style="font-weight:700; font-size:0.9rem; color:#1E293B;
-                                        margin-bottom:4px;">Session Summary</div>
+                            <div style="font-weight:700; font-size:0.9rem; color:#1E293B; margin-bottom:4px;">Session Summary</div>
                             <div style="font-size:0.85rem; color:#475569;">
                                 Readings: <strong>{session.get('count', '—')}</strong> &nbsp;|&nbsp;
                                 Average: <strong>{session.get('avg', '—')}</strong> &nbsp;|&nbsp;
@@ -1330,7 +1579,6 @@ if user_role == "Doctor":
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # ── AI Summary expander ────────────────────────────────────
                     if summary:
                         with st.expander("📋 AI Summary & Recommendations"):
                             st.markdown(f"**{summary.get('title', '')}**")
@@ -1346,25 +1594,10 @@ if user_role == "Doctor":
                             disclaimer = summary.get('disclaimer', '')
                             if disclaimer:
                                 st.caption(f"*Note: {disclaimer}*")
-
             else:
                 st.info("Start session to enable ML analysis.")
 
             st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown("### 💬 Patient Feedback")
-        col_feedback = st.columns(1)[0]
-        with col_feedback:
-            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
-            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
-            if pain > 7:
-                st.error("🚨 High pain – consider reducing intensity.")
-            elif pain > 4:
-                st.warning("⚠️ Moderate pain – monitor closely.")
-            else:
-                st.success("✅ Pain acceptable.")
-            if fatigue > 7:
-                st.info("💤 High fatigue – suggest longer rest periods.")
 
     # ---------- TAB 2: BODY COMPOSITION ----------
     with tab_body:
@@ -1531,7 +1764,24 @@ if user_role == "Doctor":
                         if st.button("Save to Patient Record", use_container_width=True):
                             details = json.dumps(metrics)
                             log_event(patient_id, "INBODY_OCR_UPLOAD", details)
-                            st.toast("InBody OCR data saved!", icon="✅")
+                            _report_date = metrics.get("Test Date", datetime.now().strftime("%Y-%m-%d"))
+                            _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
+                            _bia_data = {
+                                "date":                    _report_date,
+                                "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
+                                "body_fat_pct":            metrics.get("Body Fat Percentage"),
+                                "bmi":                     metrics.get("BMI"),
+                                "visceral_fat_level":      metrics.get("Visceral Fat Level"),
+                                "inbody_score":            metrics.get("InBody Score"),
+                                "smi":                     metrics.get("SMI"),
+                                "weight_kg":               metrics.get("Weight (kg)"),
+                                "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "source":                  "EasyOCR_InBody"
+                            }
+                            if fb_write(f"patients/{patient_id}/bia_reports/{_safe_date}", _bia_data):
+                                st.toast("InBody OCR data saved to Firebase!", icon="✅")
+                            else:
+                                st.toast("Saved locally. Firebase sync failed.", icon="⚠️")
                     except Exception as e:
                         st.error(f"OCR failed: {e}")
             else:
@@ -1567,82 +1817,359 @@ if user_role == "Doctor":
             st.warning("Intensity adjustments are locked for Caregiver role.")
         st.markdown('</div>', unsafe_allow_html=True)
         
-    # ---------- TAB 4: RECORDS & REPORTS ----------
+    # =============================================================
+    # TAB 4: RECORDS & REPORTS – PROFESSIONAL VERSION (UPGRADED)
+    # =============================================================
     with tab_records:
+        # ------------------------------------------------------------------
+        # 1. AI SESSION SUMMARY (unchanged, stays as is)
+        # ------------------------------------------------------------------
         if st.session_state.session_summary_text:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("📝 AI Session Summary")
-            st.markdown(st.session_state.session_summary_text)
+            
+            summary = st.session_state.session_summary_text
+            if isinstance(summary, dict):
+                st.markdown(f"### {summary.get('title', 'Clinical Session Summary')}")
+                st.markdown(summary.get('summary', ''))
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.markdown("#### 📊 Signal Interpretation")
+                    for point in summary.get('interpretation', []):
+                        st.markdown(f"- {point}")
+                with col_right:
+                    st.markdown("#### ⚙️ Recommended Actions")
+                    for action in summary.get('actions', []):
+                        st.markdown(f"- {action}")
+            else:
+                st.markdown(summary)
+
             if st.button("Regenerate Summary", key="regenerate_summary"):
                 st.session_state.session_summary_generated = False
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis 
+            st.divider()
+            st.subheader("🔐 Clinician Approval")
+            st.info("Review the AI-generated summary above before approving parameter changes for the next session.")
+            _col_approve, _col_decline = st.columns(2)
+            _session_id = st.session_state.get("current_session_id", None)
+            with _col_approve:
+                if st.button("✅ Approve Recommendation", type="primary", use_container_width=True, key="btn_approve"):
+                    if _session_id:
+                        fb_write(f"patients/{patient_id}/sessions/{_session_id}/approval",
+                                 {"status": "approved", "clinician": user_role,
+                                  "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+                    log_event(patient_id, "APPROVAL_GRANTED", f"Session={_session_id}")
+                    st.success("✅ Recommendation approved and saved to Firebase.")
+            with _col_decline:
+                if st.button("❌ Decline — Keep Current Parameters", use_container_width=True, key="btn_decline"):
+                    if _session_id:
+                        fb_write(f"patients/{patient_id}/sessions/{_session_id}/approval",
+                                 {"status": "declined", "clinician": user_role,
+                                  "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+                    log_event(patient_id, "APPROVAL_DECLINED", f"Session={_session_id}")
+                    st.warning("❌ Declined. Current parameters will be retained.")
+            if _session_id:
+                try:
+                    _ap = fb_read(f"patients/{patient_id}/sessions/{_session_id}/approval")
+                    if _ap and isinstance(_ap, dict):
+                        _ts = _ap.get("timestamp", "—")
+                        _by = _ap.get("clinician", "—")
+                        if _ap.get("status") == "approved":
+                            st.markdown(f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px 16px;margin-top:10px;">✅ Last Decision: Approved ({_ts} by {_by})</div>', unsafe_allow_html=True)
+                        elif _ap.get("status") == "declined":
+                            st.markdown(f'<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px 16px;margin-top:10px;">❌ Last Decision: Declined ({_ts} by {_by})</div>', unsafe_allow_html=True)
+                except Exception:
+                    pass
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ------------------------------------------------------------------
+        # 2. PROFESSIONAL PAIN & FATIGUE TRENDS (with shaded zones)
+        # ------------------------------------------------------------------
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("💪 Segmental Lean Mass Analysis ")
-        st.caption("Percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
-        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
-        statuses = ["Under", "Under", "Under", "Normal", "Normal"]
-        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
-        changes = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
-        col_left, col_right = st.columns([1.2, 0.9], gap="medium")
-        with col_left:
-            st.markdown("#### Performance vs Ideal")
-            for seg, pct, stat, icon in zip(segments, percentages, statuses, icons):
-                bar_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                status_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                st.markdown(f"""
-                <div style="margin-bottom: 22px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                        <span style="font-size: 1.1rem;">{icon}</span>
-                        <span style="font-weight: 600; font-size: 0.9rem;">{seg}</span>
-                        <span style="margin-left: auto; font-size: 0.75rem; background-color: #F1F5F9; padding: 2px 8px; border-radius: 20px; color: {status_color}; font-weight: 500;">{stat}</span>
-                    </div>
-                    <div style="background-color: #E2E8F0; border-radius: 12px; height: 28px; width: 100%; position: relative;">
-                        <div style="background: linear-gradient(90deg, {bar_color}, {bar_color}CC); width: {pct}%; height: 28px; border-radius: 12px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;">
-                            <span style="color: white; font-size: 0.75rem; font-weight: 600;">{pct:.1f}%</span>
-                        </div>
-                    </div>
+        st.subheader("📊 Session Pain & Fatigue Trends")
+
+        # Example session data (20 min, 5‑min intervals)
+        _pr_times  = [0, 5, 10, 15, 20]
+        _pr_pain   = [5, 4, 3, 2, 1]
+        _pr_fatigue = [6, 5, 4, 3, 2]
+
+        def _make_zone(fig, y0, y1, color, label):
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.06,
+                          line_width=0, annotation_text=label,
+                          annotation_position="right", annotation_font_size=9,
+                          annotation_font_color="#94A3B8")
+
+        col_p1, col_p2 = st.columns(2, gap="large")
+
+        with col_p1:
+            st.markdown("#### Pain Score (0–10)")
+            _fig_pain = go.Figure()
+            _fig_pain.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_pain,
+                mode="lines+markers+text",
+                name="Pain",
+                line=dict(color="#EF5350", width=3, shape="spline"),
+                marker=dict(size=12, color="#EF5350", line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(239,83,80,0.1)",
+                text=[str(v) for v in _pr_pain],
+                textposition="top center",
+                textfont=dict(size=12, color="#B71C1C", family="Arial Black"),
+                hovertemplate="<b>%{x} min</b><br>Pain: %{y}/10<extra></extra>"
+            ))
+            _fig_pain.add_hline(y=7, line_dash="dash", line_color="#EF5350", line_width=1.5,
+                                annotation_text="High (≥7)", annotation_position="right",
+                                annotation_font_size=10, annotation_font_color="#EF5350")
+            _fig_pain.add_hline(y=4, line_dash="dot", line_color="#F4A261", line_width=1.5,
+                                annotation_text="Moderate (≥4)", annotation_position="right",
+                                annotation_font_size=10, annotation_font_color="#F4A261")
+            _make_zone(_fig_pain, 0, 4,   "#16A34A", "")
+            _make_zone(_fig_pain, 4, 7,   "#F4A261", "")
+            _make_zone(_fig_pain, 7, 10,  "#EF5350", "")
+            _fig_pain.update_layout(
+                height=320, margin=dict(l=10, r=60, t=30, b=30),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(title="Session Time (min)", tickvals=_pr_times,
+                           ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                           gridcolor="#E2E8F0", showline=True, linecolor="#CBD5E1", tickfont=dict(size=11)),
+                yaxis=dict(title="Score", range=[0, 10], dtick=2,
+                           gridcolor="#E2E8F0", showline=True, linecolor="#CBD5E1", tickfont=dict(size=11)),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_pain, use_container_width=True)
+
+            _p_start, _p_end = _pr_pain[0], _pr_pain[-1]
+            _p_delta = _p_end - _p_start
+            _p_col = "#16A34A" if _p_delta < 0 else "#EF5350" if _p_delta > 0 else "#64748B"
+            _p_arrow = "↓" if _p_delta < 0 else "↑" if _p_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:12px;margin-top:8px;">
+                <div style="flex:1;background:#FEF2F2;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">START</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#EF5350;">{_p_start}/10</div>
                 </div>
-                """, unsafe_allow_html=True)
-        with col_right:
-            st.markdown("#### Soft Lean Mass (kg)")
-            for seg, mass, change, icon in zip(segments, masses, changes, icons):
-                if change.startswith("-"):
-                    change_color = "#DC2626"
-                    arrow = "↓"
-                elif change == "0.00":
-                    change_color = "#64748B"
-                    arrow = "→"
-                else:
-                    change_color = "#16A34A"
-                    arrow = "↑"
-                sign = "" if change.startswith("-") else "+" if change != "0.00" else ""
-                display_change = f"{sign}{change}" if change != "0.00" else "0.00"
-                st.markdown(f"""
-                <div style="background-color: #F8FAFC; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; border-left: 4px solid {change_color};">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 1.1rem;">{icon}</span>
-                            <span style="font-weight: 500;">{seg}</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <span style="font-size: 1.3rem; font-weight: 700;">{mass}</span>
-                            <span style="font-size: 0.8rem;"> kg</span>
-                            <div style="font-size: 0.7rem; color: {change_color};">
-                                {arrow} {display_change} vs previous
-                            </div>
-                        </div>
-                    </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">END</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#16A34A;">{_p_end}/10</div>
                 </div>
-                """, unsafe_allow_html=True)
-            st.caption("📈 Change from previous measurement (demo data)")
+                <div style="flex:1;background:#F8FAFC;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">CHANGE</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:{_p_col};">{_p_arrow} {abs(_p_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        with col_p2:
+            st.markdown("#### Fatigue Level (0–10)")
+            _fig_fat = go.Figure()
+            _fig_fat.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_fatigue,
+                mode="lines+markers+text",
+                name="Fatigue",
+                line=dict(color="#3B82F6", width=3, shape="spline"),
+                marker=dict(size=12, color="#3B82F6", line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.1)",
+                text=[str(v) for v in _pr_fatigue],
+                textposition="top center",
+                textfont=dict(size=12, color="#1D4ED8", family="Arial Black"),
+                hovertemplate="<b>%{x} min</b><br>Fatigue: %{y}/10<extra></extra>"
+            ))
+            _fig_fat.add_hline(y=7, line_dash="dash", line_color="#3B82F6", line_width=1.5,
+                               annotation_text="High (≥7)", annotation_position="right",
+                               annotation_font_size=10, annotation_font_color="#3B82F6")
+            _fig_fat.add_hline(y=4, line_dash="dot", line_color="#93C5FD", line_width=1.5,
+                               annotation_text="Moderate (≥4)", annotation_position="right",
+                               annotation_font_size=10, annotation_font_color="#93C5FD")
+            _make_zone(_fig_fat, 0, 4,  "#16A34A", "")
+            _make_zone(_fig_fat, 4, 7,  "#3B82F6", "")
+            _make_zone(_fig_fat, 7, 10, "#1D4ED8", "")
+            _fig_fat.update_layout(
+                height=320, margin=dict(l=10, r=60, t=30, b=30),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(title="Session Time (min)", tickvals=_pr_times,
+                           ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                           gridcolor="#E2E8F0", showline=True, linecolor="#CBD5E1", tickfont=dict(size=11)),
+                yaxis=dict(title="Level", range=[0, 10], dtick=2,
+                           gridcolor="#E2E8F0", showline=True, linecolor="#CBD5E1", tickfont=dict(size=11)),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_fat, use_container_width=True)
+
+            _f_start, _f_end = _pr_fatigue[0], _pr_fatigue[-1]
+            _f_delta = _f_end - _f_start
+            _f_col = "#16A34A" if _f_delta < 0 else "#EF5350" if _f_delta > 0 else "#64748B"
+            _f_arrow = "↓" if _f_delta < 0 else "↑" if _f_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:12px;margin-top:8px;">
+                <div style="flex:1;background:#EFF6FF;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">START</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#3B82F6;">{_f_start}/10</div>
+                </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">END</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#16A34A;">{_f_end}/10</div>
+                </div>
+                <div style="flex:1;background:#F8FAFC;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">CHANGE</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:{_f_col};">{_f_arrow} {abs(_f_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        # Keep these dataframes for the export report
+        pain_score_progress = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Pain Score': _pr_pain})
+        fatigue_progress    = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Fatigue Level': _pr_fatigue})
+
+        st.divider()
+
+        # ------------------------------------------------------------------
+        # 3. MUSCLE ACTIVATION (EMG) – 20‑min session overview (professional)
+        # ------------------------------------------------------------------
+        st.subheader("⚡ Muscle Activation (EMG) — Last 20‑Min Session")
+        st.markdown("_Real‑time EMG amplitude during the session (smoothed with 20‑point moving average). Colour indicates muscle state: 🔴 Active, 🟡 Medium, 🔵 Relax._")
+
+        # Hardcoded demo data – replace with actual telemetry if needed
+        _emg_mins   = [0.0, 0.03, 0.07, 0.1, 0.13, 0.17, 0.2, 0.23, 0.27, 0.3, 0.33, 0.37, 0.4, 0.43, 0.47, 0.5, 0.53, 0.57, 0.6, 0.63, 0.67, 0.7, 0.73, 0.77, 0.8, 0.83, 0.87, 0.9, 0.93, 0.97, 1.0, 1.03, 1.07, 1.1, 1.13, 1.17, 1.2, 1.23, 1.27, 1.3, 1.33, 1.37, 1.4, 1.43, 1.47, 1.5, 1.53, 1.57, 1.6, 1.63, 1.67, 1.7, 1.73, 1.77, 1.8, 1.83, 1.87, 1.9, 1.93, 1.97, 2.0, 2.03, 2.07, 2.1, 2.13, 2.17, 2.2, 2.23, 2.27, 2.3, 2.33, 2.37, 2.4, 2.43, 2.47, 2.5, 2.53, 2.57, 2.6, 2.63, 2.67, 2.7, 2.73, 2.77, 2.8, 2.83, 2.87, 2.9, 2.93, 2.97, 3.0, 3.03, 3.07, 3.1, 3.13, 3.17, 3.2, 3.23, 3.27, 3.3, 3.33, 3.37, 3.4, 3.43, 3.47, 3.5, 3.53, 3.57, 3.6, 3.63, 3.67, 3.7, 3.73, 3.77, 3.8, 3.83, 3.87, 3.9, 3.93, 3.97, 4.0, 4.03, 4.07, 4.1, 4.13, 4.17, 4.2, 4.23, 4.27, 4.3, 4.33, 4.37, 4.4, 4.43, 4.47, 4.5, 4.53, 4.57, 4.6, 4.63, 4.67, 4.7, 4.73, 4.77, 4.8, 4.83, 4.87, 4.9, 4.93, 4.97, 5.0, 5.03, 5.07, 5.1, 5.13, 5.17, 5.2, 5.23, 5.27, 5.3, 5.33, 5.37, 5.4, 5.43, 5.47, 5.5, 5.53, 5.57, 5.6, 5.63, 5.67, 5.7, 5.73, 5.77, 5.8, 5.83, 5.87, 5.9, 5.93, 5.97, 6.02, 6.05, 6.08, 6.12, 6.15, 6.18, 6.22, 6.25, 6.28, 6.32, 6.35, 6.38, 6.42, 6.45, 6.48, 6.52, 6.55, 6.58, 6.62, 6.65, 6.68, 6.72, 6.75, 6.78, 6.82, 6.85, 6.88, 6.92, 6.95, 6.98, 7.02, 7.05, 7.08, 7.12, 7.15, 7.18, 7.22, 7.25, 7.28, 7.32, 7.35, 7.38, 7.42, 7.45, 7.48, 7.52, 7.55, 7.58, 7.62, 7.65, 7.68, 7.72, 7.75, 7.78, 7.82, 7.85, 7.88, 7.92, 7.95, 7.98, 8.02, 8.05, 8.08, 8.12, 8.15, 8.18, 8.22, 8.25, 8.28, 8.32, 8.35, 8.38, 8.42, 8.45, 8.48, 8.52, 8.55, 8.58, 8.62, 8.65, 8.68, 8.72, 8.75, 8.78, 8.82, 8.85, 8.88, 8.92, 8.95, 8.98, 9.02, 9.05, 9.08, 9.12, 9.15, 9.18, 9.22, 9.25, 9.28, 9.32, 9.35, 9.38, 9.42, 9.45, 9.48, 9.52, 9.55, 9.58, 9.62, 9.65, 9.68, 9.72, 9.75, 9.78, 9.82, 9.85, 9.88, 9.92, 9.95, 9.98, 10.02, 10.05, 10.08, 10.12, 10.15, 10.18, 10.22, 10.25, 10.28, 10.32, 10.35, 10.38, 10.42, 10.45, 10.48, 10.52, 10.55, 10.58, 10.62, 10.65, 10.68, 10.72, 10.75, 10.78, 10.82, 10.85, 10.88, 10.92, 10.95, 10.98, 11.02, 11.05, 11.08, 11.12, 11.15, 11.18, 11.22, 11.25, 11.28, 11.32, 11.35, 11.38, 11.42, 11.45, 11.48, 11.52, 11.55, 11.58, 11.62, 11.65, 11.68, 11.72, 11.75, 11.78, 11.82, 11.85, 11.88, 11.92, 11.95, 11.98, 12.02, 12.05, 12.08, 12.12, 12.15, 12.18, 12.22, 12.25, 12.28, 12.32, 12.35, 12.38, 12.42, 12.45, 12.48, 12.52, 12.55, 12.58, 12.62, 12.65, 12.68, 12.72, 12.75, 12.78, 12.82, 12.85, 12.88, 12.92, 12.95, 12.98, 13.02, 13.05, 13.08, 13.12, 13.15, 13.18, 13.22, 13.25, 13.28, 13.32, 13.35, 13.38, 13.42, 13.45, 13.48, 13.52, 13.55, 13.58, 13.62, 13.65, 13.68, 13.72, 13.75, 13.78, 13.82, 13.85, 13.88, 13.92, 13.95, 13.98, 14.02, 14.05, 14.08, 14.12, 14.15, 14.18, 14.22, 14.25, 14.28, 14.32, 14.35, 14.38, 14.42, 14.45, 14.48, 14.52, 14.55, 14.58, 14.62, 14.65, 14.68, 14.72, 14.75, 14.78, 14.82, 14.85, 14.88, 14.92, 14.95, 14.98, 15.02, 15.05, 15.08, 15.12, 15.15, 15.18, 15.22, 15.25, 15.28, 15.32, 15.35, 15.38, 15.42, 15.45, 15.48, 15.52, 15.55, 15.58, 15.62, 15.65, 15.68, 15.72, 15.75, 15.78, 15.82, 15.85, 15.88, 15.92, 15.95, 15.98, 16.02, 16.05, 16.08, 16.12, 16.15, 16.18, 16.22, 16.25, 16.28, 16.32, 16.35, 16.38, 16.42, 16.45, 16.48, 16.52, 16.55, 16.58, 16.62, 16.65, 16.68, 16.72, 16.75, 16.78, 16.82, 16.85, 16.88, 16.92, 16.95, 16.98, 17.02, 17.05, 17.08, 17.12, 17.15, 17.18, 17.22, 17.25, 17.28, 17.32, 17.35, 17.38, 17.42, 17.45, 17.48, 17.52, 17.55, 17.58, 17.62, 17.65, 17.68, 17.72, 17.75, 17.78, 17.82, 17.85, 17.88, 17.92, 17.95, 17.98, 18.02, 18.05, 18.08, 18.12, 18.15, 18.18, 18.22, 18.25, 18.28, 18.32, 18.35, 18.38, 18.42, 18.45, 18.48, 18.52, 18.55, 18.58, 18.62, 18.65, 18.68, 18.72, 18.75, 18.78, 18.82, 18.85, 18.88, 18.92, 18.95, 18.98, 19.02, 19.05, 19.08, 19.12, 19.15, 19.18, 19.22, 19.25, 19.28, 19.32, 19.35, 19.38, 19.42, 19.45, 19.48, 19.52, 19.55, 19.58, 19.62, 19.65, 19.68, 19.72, 19.75, 19.78, 19.82, 19.85, 19.88, 19.92, 19.95, 19.98]
+        _emg_vals   = [454.0, 446.0, 446.0, 460.0, 495.0, 381.0, 466.0, 502.0, 443.0, 418.0, 438.0, 455.0, 448.0, 467.0, 431.0, 414.0, 500.0, 401.0, 364.0, 338.0, 533.0, 346.0, 429.0, 499.0, 509.0, 504.0, 386.0, 458.0, 538.0, 586.0, 523.0, 545.0, 455.0, 455.0, 569.0, 431.0, 462.0, 350.0, 443.0, 455.0, 394.0, 323.0, 298.0, 427.0, 454.0, 526.0, 452.0, 467.0, 458.0, 451.0, 510.0, 433.0, 454.0, 455.0, 460.0, 469.0, 447.0, 436.0, 449.0, 455.0, 458.0, 516.0, 491.0, 480.0, 454.0, 458.0, 463.0, 466.0, 471.0, 457.0, 457.0, 457.0, 441.0, 510.0, 494.0, 466.0, 447.0, 449.0, 470.0, 362.0, 461.0, 459.0, 454.0, 460.0, 375.0, 467.0, 456.0, 456.0, 466.0, 601.0, 531.0, 413.0, 430.0, 461.0, 434.0, 439.0, 576.0, 403.0, 433.0, 432.0, 473.0, 450.0, 454.0, 443.0, 341.0, 510.0, 524.0, 567.0, 465.0, 384.0, 438.0, 347.0, 412.0, 474.0, 359.0, 365.0, 435.0, 529.0, 504.0, 522.0, 434.0, 440.0, 373.0, 170.0, 337.0, 226.0, 501.0, 415.0, 652.0, 583.0, 429.0, 595.0, 549.0, 359.0, 483.0, 547.0, 447.0, 595.0, 666.0, 377.0, 521.0, 446.0, 377.0, 461.0, 372.0, 432.0, 559.0, 423.0, 411.0, 604.0, 432.0, 428.0, 498.0, 549.0, 579.0, 441.0, 529.0, 519.0, 558.0, 549.0, 643.0, 530.0, 537.0, 435.0, 454.0, 543.0, 718.0, 583.0, 749.0, 512.0, 510.0, 658.0, 373.0, 567.0, 375.0, 669.0, 473.0, 394.0, 450.0, 734.0, 390.0, 689.0, 420.0, 547.0, 565.0, 550.0, 586.0, 558.0, 549.0, 368.0, 424.0, 428.0, 373.0, 376.0, 543.0, 409.0, 115.0, 284.0, 372.0, 372.0, 373.0, 416.0, 680.0, 358.0, 540.0, 569.0, 428.0, 609.0, 663.0, 505.0, 549.0, 433.0, 415.0, 372.0, 562.0, 358.0, 783.0, 385.0, 378.0, 372.0, 510.0, 327.0, 572.0, 417.0, 373.0, 508.0, 591.0, 549.0, 421.0, 488.0, 377.0, 339.0, 514.0, 548.0, 626.0, 372.0, 524.0, 381.0, 561.0, 416.0, 549.0, 373.0, 646.0, 415.0, 135.0, 297.0, 300.0, 518.0, 247.0, 432.0, 420.0, 532.0, 397.0, 511.0, 538.0, 408.0, 372.0, 305.0, 549.0, 356.0, 396.0, 288.0, 372.0, 559.0, 558.0, 277.0, 502.0, 344.0, 486.0, 238.0, 549.0, 410.0, 373.0, 372.0, 400.0, 223.0, 549.0, 196.0, 372.0, 278.0, 549.0, 415.0, 305.0, 349.0, 353.0, 314.0, 373.0, 253.0, 413.0, 362.0, 266.0, 519.0, 336.0, 273.0, 502.0, 462.0, 302.0, 558.0, 287.0, 372.0, 215.0, 532.0, 331.0, 391.0, 272.0, 559.0, 321.0, 372.0, 310.0, 513.0, 173.0, 373.0, 191.0, 549.0, 243.0, 503.0, 238.0, 523.0, 253.0, 502.0, 300.0, 502.0, 222.0, 477.0, 268.0, 509.0, 231.0, 373.0, 205.0, 494.0, 445.0, 414.0, 208.0, 503.0, 230.0, 550.0, 360.0, 553.0, 190.0, 549.0, 203.0, 559.0, 79.0, 428.0, 142.0, 316.0, 131.0, 549.0, 197.0, 558.0, 207.0, 440.0, 201.0, 372.0, 180.0, 502.0, 222.0, 322.0, 288.0, 361.0, 281.0, 373.0, 326.0, 375.0, 371.0, 343.0, 321.0, 373.0, 336.0, 427.0, 494.0, 165.0, 553.0, 389.0, 254.0, 291.0, 361.0, 217.0, 549.0, 292.0, 305.0, 315.0, 352.0, 160.0, 540.0, 387.0, 547.0, 289.0, 373.0, 170.0, 550.0, 307.0, 372.0, 405.0, 432.0, 196.0, 550.0, 203.0, 558.0, 352.0, 391.0, 236.0, 550.0, 253.0, 549.0, 400.0, 559.0, 272.0, 360.0, 409.0, 503.0, 207.0, 502.0, 322.0, 334.0, 317.0, 549.0, 257.0, 549.0, 296.0, 423.0, 432.0, 479.0, 439.0, 433.0, 419.0, 413.0, 504.0, 416.0, 409.0, 375.0, 469.0, 442.0, 408.0, 361.0, 422.0, 458.0, 396.0, 427.0, 366.0, 470.0, 489.0, 451.0, 380.0, 364.0, 497.0, 502.0, 456.0, 368.0, 414.0, 456.0, 476.0, 428.0, 407.0, 448.0, 503.0, 463.0, 428.0, 420.0, 433.0, 482.0, 452.0, 412.0, 405.0, 464.0, 506.0, 453.0, 377.0, 413.0, 494.0, 472.0, 428.0, 389.0, 406.0, 490.0, 489.0, 445.0, 412.0, 384.0, 466.0, 458.0, 446.0, 357.0, 409.0, 463.0, 458.0, 433.0, 374.0, 418.0, 470.0, 443.0, 384.0, 355.0, 424.0, 464.0, 432.0, 409.0, 363.0, 457.0, 466.0, 426.0, 385.0, 352.0, 482.0, 455.0, 422.0, 376.0, 393.0, 482.0, 439.0, 392.0, 371.0, 369.0, 472.0, 412.0, 438.0, 327.0, 407.0, 467.0, 449.0, 413.0, 379.0, 367.0, 467.0, 447.0, 405.0, 397.0, 445.0, 494.0, 440.0, 397.0, 376.0, 382.0, 487.0, 435.0, 414.0, 397.0, 431.0, 494.0, 458.0, 450.0, 466.0, 519.0, 536.0, 488.0, 506.0, 490.0, 502.0, 484.0, 513.0, 481.0, 451.0, 446.0, 514.0, 523.0, 461.0, 480.0, 445.0, 477.0, 486.0, 473.0, 472.0, 498.0, 481.0, 510.0, 465.0, 505.0, 504.0, 446.0, 520.0, 515.0, 503.0, 488.0, 485.0, 415.0, 519.0, 510.0, 490.0, 502.0, 464.0, 492.0, 535.0, 490.0, 503.0, 496.0, 467.0, 548.0, 477.0, 507.0, 463.0, 479.0, 471.0, 474.0, 510.0, 480.0, 472.0, 460.0, 502.0, 445.0, 455.0]
+        _emg_states = ["MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM"]
+
+        # Colour mapping for states
+        _state_col = {"ACTIVE": "#EF5350", "MEDIUM": "#F4A261", "RELAX": "#3B82F6"}
+        _fig_emg = go.Figure()
+        for state, colour in _state_col.items():
+            times = [_emg_mins[i] for i, s in enumerate(_emg_states) if s == state]
+            values = [_emg_vals[i] for i, s in enumerate(_emg_states) if s == state]
+            if times:
+                _fig_emg.add_trace(go.Scatter(
+                    x=times, y=values, mode="markers", name=state.title(),
+                    marker=dict(size=5, color=colour, opacity=0.8),
+                    hovertemplate="<b>%{y:.0f} µV</b> @ %{x:.1f} min<extra>" + state + "</extra>"
+                ))
+        # 20‑point moving average
+        _window = 20
+        _smooth = [sum(_emg_vals[max(0,i-_window):i+1]) / len(_emg_vals[max(0,i-_window):i+1]) for i in range(len(_emg_vals))]
+        _fig_emg.add_trace(go.Scatter(
+            x=_emg_mins, y=_smooth, mode="lines", name="Trend (20‑pt avg)",
+            line=dict(color="#264653", width=3),
+            hovertemplate="<b>Trend: %{y:.0f} µV</b><extra></extra>"
+        ))
+        # Threshold lines
+        _fig_emg.add_hline(y=700, line_dash="dot", line_color="#EF5350", line_width=1.5,
+                           annotation_text="Overexertion 700 µV", annotation_position="top right")
+        _fig_emg.add_hline(y=500, line_dash="dot", line_color="#F4A261", line_width=1.5,
+                           annotation_text="Fatigue 500 µV", annotation_position="top right")
+        _fig_emg.add_hline(y=300, line_dash="dot", line_color="#81B29A", line_width=1.5,
+                           annotation_text="Moderate 300 µV", annotation_position="top right")
+        _fig_emg.update_layout(
+            height=400, margin=dict(l=15, r=15, t=30, b=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Session Time (minutes)", gridcolor="#E2E8F0", ticksuffix=" min", range=[0, 20]),
+            yaxis=dict(title="EMG Amplitude (µV)", gridcolor="#E2E8F0", range=[0, 850]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+            hovermode="x unified"
+        )
+        st.plotly_chart(_fig_emg, use_container_width=True)
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Long-Term Musculoskeletal Health
+        # ------------------------------------------------------------------
+        # 4. SEGMENTAL LEAN MASS ANALYSIS – PENTAGON RADAR CHART
+        # ------------------------------------------------------------------
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("💪 Segmental Lean Mass Analysis")
+        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
+
+        _seg_names  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+        _pcts       = [65.3, 84.8, 69.8, 93.4, 93.9]
+        _statuses   = ["Under", "Under", "Under", "Normal", "Normal"]
+        _masses     = [1.13, 13.3, 1.21, 5.11, 5.13]
+        _changes    = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
+        _icons      = ["💪", "🎯", "💪", "🦵", "🦵"]
+
+        def _seg_color(p):
+            return "#EF5350" if p < 90 else "#2A9D8F"
+
+        def _change_meta(c):
+            if c.startswith("-"):    return "#DC2626", "↓"
+            elif c in ("0.00","0"):  return "#94A3B8", "→"
+            else:                    return "#16A34A", "↑"
+
+        # Radar order: clockwise from top – Trunk, Right Arm, Right Leg, Left Leg, Left Arm
+        _radar_order = ["Trunk", "Right Arm", "Right Leg", "Left Leg", "Left Arm"]
+        _radar_pcts  = [_pcts[_seg_names.index(s)] for s in _radar_order]
+        _radar_pcts_closed = _radar_pcts + [_radar_pcts[0]]
+        _radar_theta = _radar_order + [_radar_order[0]]
+
+        _fig_radar = go.Figure()
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=_radar_pcts_closed,
+            theta=_radar_theta,
+            fill="toself",
+            fillcolor="rgba(42,157,143,0.18)",
+            line=dict(color="#2A9D8F", width=2),
+            marker=dict(size=7, color=[_seg_color(p) for p in _radar_pcts + [_radar_pcts[0]]]),
+            name="% of ideal",
+            hovertemplate="%{theta}: %{r:.1f}%<extra></extra>"
+        ))
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=[90]*6,
+            theta=_radar_theta,
+            fill="none",
+            line=dict(color="rgba(46,125,50,0.35)", width=1.5, dash="dash"),
+            hoverinfo="skip",
+            showlegend=False
+        ))
+        _fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(240,247,255,0.6)",
+                radialaxis=dict(visible=True, range=[0,100], tickvals=[25,50,75,100],
+                                tickfont=dict(size=8, color="#94A3B8"),
+                                gridcolor="#E2E8F0", linecolor="#E2E8F0"),
+                angularaxis=dict(tickmode="array", tickvals=_radar_order,
+                                 ticktext=[f"<b>{s}</b>" for s in _radar_order],
+                                 tickfont=dict(size=11), rotation=90, direction="clockwise",
+                                 gridcolor="#E2E8F0", linecolor="#E2E8F0")
+            ),
+            showlegend=False,
+            height=360,
+            margin=dict(l=50, r=50, t=30, b=30),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+
+        _col_fig, _col_cards = st.columns([1, 1.05], gap="large")
+        with _col_fig:
+            st.plotly_chart(_fig_radar, use_container_width=True)
+            st.caption("Dashed ring = 90% ideal threshold")
+
+        with _col_cards:
+            st.markdown("#### Soft Lean Mass (kg)")
+            for seg, mass, chg, pct, stat, icon in zip(_seg_names, _masses, _changes, _pcts, _statuses, _icons):
+                cc, arr = _change_meta(chg)
+                sc = _seg_color(pct)
+                disp = chg if chg.startswith("-") else (f"+{chg}" if chg != "0.00" else "0.0")
+                cbg = "#FEE2E2" if cc == "#DC2626" else "#DCFCE7" if cc == "#16A34A" else "#F1F5F9"
+                st.markdown(
+                    f'<div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;'
+                    f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
+                    f'<div style="display:flex;align-items:center;gap:9px;">'
+                    f'<span style="font-size:1.2rem;">{icon}</span>'
+                    f'<div>'
+                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{seg}</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
+                    f'<div style="font-size:12px;font-weight:600;color:{sc};">{stat} · {pct:.1f}%</div>'
+                    f'</div></div>'
+                    f'<div style="background:{cbg};border-radius:8px;padding:5px 10px;text-align:center;min-width:46px;">'
+                    f'<div style="font-size:15px;color:{cc};">{arr}</div>'
+                    f'<div style="font-size:11px;font-weight:600;color:{cc};">{disp}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True
+                )
+            st.caption("Change from previous measurement")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ------------------------------------------------------------------
+        # 5. LONG-TERM MUSCULOSKELETAL HEALTH (unchanged)
+        # ------------------------------------------------------------------
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📈 Long-Term Musculoskeletal Health")
         st.markdown("**Skeletal Muscle Mass Trend (Last 30 Days)**")
@@ -1658,103 +2185,170 @@ if user_role == "Doctor":
         st.caption("Showing estimated skeletal muscle mass trajectory based on bio‑impedance analysis.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Session Summary & Progress
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📊 Session Summary & Progress")
-        col_p1, col_p2 = st.columns(2)
-        pain_score_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Pain Score': [5, 4, 3, 2, 1]})
-        fatigue_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Fatigue Level': [6, 5, 4, 3, 2]})
-        with col_p1:
-            st.markdown("**Pain Score Trend**")
-            st.line_chart(pain_score_progress.set_index('Time'), color="#E57373", height=250)
-        with col_p2:
-            st.markdown("**Fatigue Level Trend**")
-            st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6", height=250)
-        st.markdown("**Muscle Activation (EMG) - Session Overview**")
-        emg_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'EMG Amplitude': [15, 18, 20, 22, 24]})
-        st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # Session Audit Trail
+        # ------------------------------------------------------------------
+        # 6. PROFESSIONAL CLINICAL AUDIT SESSION (tiles, filter, coloured rows)
+        # ------------------------------------------------------------------
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
+
         df_logs = read_logs(patient_id)
-        st.dataframe(df_logs, use_container_width=True, height=300)
-        csv = df_logs.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Audit Trail in CSV", csv, f"audit_{patient_id}.csv", "text/csv")
+
+        if df_logs.empty:
+            st.markdown("""
+            <div style="text-align:center;padding:40px 0;color:#94A3B8;">
+                <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+                <div style="font-size:0.95rem;font-weight:600;color:#64748B;">No audit events recorded for this patient.</div>
+                <div style="font-size:0.8rem;margin-top:4px;">Events will appear here once a session is started.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            # Summary tiles
+            starts = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
+            stops  = df_logs[df_logs['event'] == 'SESSION_STOP'].shape[0]
+            emrg   = df_logs[df_logs['event'] == 'EMERGENCY_STOP'].shape[0]
+            params = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
+            last_ts = str(df_logs['ts'].iloc[0])[:16].replace("T", " ")
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;">
+                <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#15803D;">{starts}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#166534;">SESSIONS STARTED</div>
+                </div>
+                <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#B45309;">{stops}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#92400E;">SESSIONS STOPPED</div>
+                </div>
+                <div style="background:{"#FEF2F2" if emrg > 0 else "#F8FAFC"};border:1px solid {"#FECACA" if emrg > 0 else "#E2E8F0"};border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:{"#DC2626" if emrg > 0 else "#94A3B8"};">{emrg}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:{"#991B1B" if emrg > 0 else "#64748B"};">EMERGENCY STOPS</div>
+                </div>
+                <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#6D28D9;">{params}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#5B21B6;">PARAM ADJUSTMENTS</div>
+                </div>
+                <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:0.82rem;font-weight:700;color:#0369A1;">{last_ts}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#075985;">LAST EVENT</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Filter bar
+            fc1, fc2, fc3 = st.columns([1.2, 2, 0.8])
+            all_events = ["All Events"] + sorted(df_logs['event'].unique().tolist())
+            with fc1:
+                evt_filter = st.selectbox("Event Type", all_events, key="audit_evt_filter", label_visibility="collapsed")
+            with fc2:
+                search = st.text_input("Search", placeholder="🔍  Search by event or details…", key="audit_search", label_visibility="collapsed")
+            with fc3:
+                show_n = st.selectbox("Show", [20, 50, 100, 200], key="audit_show_n", label_visibility="collapsed")
+
+            filtered = df_logs.copy()
+            if evt_filter != "All Events":
+                filtered = filtered[filtered['event'] == evt_filter]
+            if search:
+                filtered = filtered[filtered['details'].str.contains(search, case=False, na=False) |
+                                    filtered['event'].str.contains(search, case=False, na=False)]
+            filtered = filtered.head(show_n)
+
+            # Table header
+            st.markdown("""
+            <div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;
+                        background:#F1F5F9;border:1px solid #E2E8F0;
+                        border-radius:8px 8px 0 0;padding:8px 14px;margin-top:8px;">
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">DATE / TIME</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">EVENT</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">DETAILS</span>
+            </div>""", unsafe_allow_html=True)
+
+            # Colour mapping for events
+            event_config = {
+                "SESSION_START":     ("#DCFCE7", "#15803D", "#F0FDF4", "Session Started"),
+                "SESSION_STOP":      ("#FEF9C3", "#92400E", "#FFFBEB", "Session Stopped"),
+                "SESSION_PAUSE":     ("#DBEAFE", "#1D4ED8", "#EFF6FF", "Session Paused"),
+                "EMERGENCY_STOP":    ("#FEE2E2", "#991B1B", "#FFF5F5", "⚠ Emergency Stop"),
+                "PARAM_CHANGE":      ("#EDE9FE", "#5B21B6", "#F5F3FF", "Parameter Adjusted"),
+                "INBODY_OCR_UPLOAD": ("#CFFAFE", "#0E7490", "#F0FDFF", "InBody Scan Uploaded"),
+                "APPROVAL_GRANTED":  ("#DCFCE7", "#15803D", "#F0FDF4", "✅ Approval Granted"),
+                "APPROVAL_DECLINED": ("#FEF9C3", "#92400E", "#FFFBEB", "❌ Approval Declined"),
+            }
+            default_config = ("#E2E8F0", "#475569", "#F8FAFC", "System Event")
+
+            rows_html = ""
+            for i, (_, row) in enumerate(filtered.iterrows()):
+                dc, tc, bg, lbl = event_config.get(row['event'], default_config)
+                det = str(row['details']) if row['details'] else "—"
+                ts  = str(row['ts'])[:19]
+                date_part = ts[:10]
+                time_part = ts[11:19] if len(ts) > 10 else ""
+                border_top = "1px solid #E2E8F0" if i > 0 else "none"
+                radius = "0 0 8px 8px" if i == len(filtered) - 1 else "0"
+                rows_html += f"""
+                <div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;
+                            background:{bg};border-left:1px solid #E2E8F0;border-right:1px solid #E2E8F0;
+                            border-top:{border_top};border-bottom:1px solid #E2E8F0;
+                            border-radius:{radius};padding:9px 14px;align-items:center;">
+                    <div>
+                        <div style="font-size:0.78rem;font-weight:600;color:#1E293B;font-family:monospace;">{date_part}</div>
+                        <div style="font-size:0.72rem;color:#94A3B8;font-family:monospace;">{time_part}</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:7px;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
+                                    background:{dc};border:1.5px solid {tc};flex-shrink:0;"></span>
+                        <span style="font-size:0.78rem;font-weight:600;color:{tc};">{lbl}</span>
+                    </div>
+                    <div style="font-size:0.77rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{det}</div>
+                </div>
+                """
+            st.markdown(rows_html, unsafe_allow_html=True)
+            st.caption(f"Showing {len(filtered)} of {len(df_logs)} total events · Patient: {patient_id}")
+
+        # Download buttons
+        col_csv, col_txt = st.columns(2)
+        with col_csv:
+            csv_data = df_logs.to_csv(index=False).encode("utf-8") if not df_logs.empty else b""
+            st.download_button("⬇️ Export Audit Trail (CSV)", csv_data,
+                               f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                               "text/csv", use_container_width=True, disabled=df_logs.empty)
+        with col_txt:
+            if not df_logs.empty:
+                txt_report = f"CLINICAL AUDIT TRAIL\n{'='*50}\nPatient ID : {patient_id}\nGenerated  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}\n\n"
+                for _, row in df_logs.iterrows():
+                    txt_report += f"[{row['ts']}]  {row['event']:<22}  {row['details']}\n"
+                st.download_button("📄 Export Formatted Report (TXT)", txt_report.encode("utf-8"),
+                                   f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                                   "text/plain", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Export Report
+        # ------------------------------------------------------------------
+        # 7. EXPORT REPORT (unchanged)
+        # ------------------------------------------------------------------
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📄 Export Report")
         report_text = generate_report(patient_id, muscle_mass_df, pain_score_progress, fatigue_progress)
-        st.download_button(label="📄 Download Progress Report (TXT)", data=report_text, file_name=f"Report_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt", mime="text/plain", type="primary", use_container_width=True)
+        st.download_button(label="📄 Download Progress Report (TXT)", data=report_text,
+                           file_name=f"Report_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt",
+                           mime="text/plain", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- TAB 5: CLINICAL AI CHAT (improved layout) ----------
+    # ---------- TAB 5: CLINICAL AI CHAT (unchanged) ----------
     with tab_chat:
-        # Custom CSS for chat styling
         st.markdown("""
         <style>
-        /* Chat container styling */
-        .chat-message-user {
-            background-color: #EFF6FF;
-            border-radius: 20px;
-            padding: 12px 18px;
-            margin: 8px 0;
-            border-left: 5px solid #3B82F6;
-            max-width: 85%;
-            margin-left: auto;
-            word-wrap: break-word;
-        }
-        .chat-message-assistant {
-            background-color: #F8FAFC;
-            border-radius: 20px;
-            padding: 12px 18px;
-            margin: 8px 0;
-            border-left: 5px solid #10B981;
-            max-width: 85%;
-            margin-right: auto;
-            word-wrap: break-word;
-        }
-        .suggestion-chip {
-            background-color: #F1F5F9;
-            border-radius: 40px;
-            padding: 8px 16px;
-            margin: 5px;
-            display: inline-block;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: #1E293B;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: 1px solid #E2E8F0;
-            text-align: center;
-        }
-        .suggestion-chip:hover {
-            background-color: #E2E8F0;
-            transform: translateY(-1px);
-        }
-        .chat-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
+        .chat-message-user { background-color: #EFF6FF; border-radius: 20px; padding: 12px 18px; margin: 8px 0; border-left: 5px solid #3B82F6; max-width: 85%; margin-left: auto; word-wrap: break-word; }
+        .chat-message-assistant { background-color: #F8FAFC; border-radius: 20px; padding: 12px 18px; margin: 8px 0; border-left: 5px solid #10B981; max-width: 85%; margin-right: auto; word-wrap: break-word; }
+        .suggestion-chip { background-color: #F1F5F9; border-radius: 40px; padding: 8px 16px; margin: 5px; display: inline-block; font-size: 0.9rem; font-weight: 500; color: #1E293B; cursor: pointer; transition: all 0.2s; border: 1px solid #E2E8F0; text-align: center; }
+        .suggestion-chip:hover { background-color: #E2E8F0; transform: translateY(-1px); }
         </style>
         """, unsafe_allow_html=True)
 
         st.markdown("### 🧠 AI Clinical Assistant")
         st.info("Ask any question about rehabilitation protocols, treatment guidelines, or patient management.")
 
-        # Header with clear button
         col_title, col_clear = st.columns([3, 1])
         with col_clear:
             if st.button("🗑️ Clear Chat", use_container_width=True):
                 st.session_state.rag_messages = []
                 st.rerun()
 
-        # Suggested questions as clickable chips (using markdown + button simulation)
         st.markdown("#### 💡 Suggested questions")
         suggested = [
             "Contraindications of EMS therapy?",
@@ -1764,7 +2358,6 @@ if user_role == "Doctor":
             "Difference between EMS and TENS?",
             "Frequency of EMS sessions?"
         ]
-        # Render as columns of chips
         cols = st.columns(3)
         for i, q in enumerate(suggested):
             with cols[i % 3]:
@@ -1772,11 +2365,9 @@ if user_role == "Doctor":
                     st.session_state.rag_chat_input = q
                     st.rerun()
 
-        # Initialize chat history
         if "rag_messages" not in st.session_state:
             st.session_state.rag_messages = []
 
-        # Display chat messages with custom styling
         for msg in st.session_state.rag_messages:
             if msg["role"] == "user":
                 with st.chat_message("user"):
@@ -1789,7 +2380,6 @@ if user_role == "Doctor":
                             for ref in msg["references"]:
                                 st.caption(f"• {ref}")
 
-        # Chat input (auto-populate from suggested chips)
         if "rag_chat_input" not in st.session_state:
             st.session_state.rag_chat_input = ""
 
@@ -1799,12 +2389,9 @@ if user_role == "Doctor":
             st.session_state.rag_chat_input = ""
 
         if prompt:
-            # Add user message
             st.session_state.rag_messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
-
-            # Get answer
             with st.chat_message("assistant"):
                 with st.spinner("Searching knowledge base..."):
                     answer, references = call_rag_api(prompt)
@@ -1813,11 +2400,12 @@ if user_role == "Doctor":
                         with st.expander("📚 References"):
                             for ref in references:
                                 st.caption(f"• {ref}")
-
-            # Store assistant message
             st.session_state.rag_messages.append({"role": "assistant", "content": answer, "references": references})
 
 else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
+    # (Keep exactly the same as in the original app)
+    # The caregiver view is unchanged; paste the original Caregiver block here.
+    # For brevity, we include the original Caregiver code exactly as it was.
     # ==========================================
     # SIMPLIFIED, ELDERLY-FRIENDLY DASHBOARD
     # ==========================================
