@@ -89,16 +89,6 @@ def fb_set_user_profile(uid, role, display_name=""):
 def do_login(email, password):
     try:
         user = auth.sign_in_with_email_and_password(email, password)
-        # Check email verified via Firebase Auth REST
-        id_token = user["idToken"]
-        info_url = (
-            "https://identitytoolkit.googleapis.com/v1/accounts:lookup"
-            f"?key={firebase_config['apiKey']}"
-        )
-        resp = requests.post(info_url, json={"idToken": id_token}, timeout=5)
-        user_info = resp.json().get("users", [{}])[0]
-        if not user_info.get("emailVerified", False):
-            return None, "EMAIL_NOT_VERIFIED"
         return user, None
     except Exception as e:
         msg = str(e)
@@ -112,58 +102,21 @@ def do_login(email, password):
             return None, "Login failed. Please check your credentials."
 
 def do_register(email, password, role, display_name):
-    """Create account, save role to DB, then send verification email.
-    Returns (user, error_msg, email_sent_bool)."""
     try:
         user = auth.create_user_with_email_and_password(email, password)
+        uid = user["localId"]
+        fb_set_user_profile(uid, role, display_name)
+        return user, None
     except Exception as e:
         msg = str(e)
         if "EMAIL_EXISTS" in msg:
-            return None, "This email is already registered.", False
+            return None, "This email is already registered."
         elif "WEAK_PASSWORD" in msg:
-            return None, "Password must be at least 6 characters.", False
+            return None, "Password must be at least 6 characters."
         elif "INVALID_EMAIL" in msg:
-            return None, "Invalid email address format.", False
+            return None, "Invalid email address format."
         else:
-            return None, f"Registration failed: {msg[:100]}", False
-
-    uid = user["localId"]
-    fb_set_user_profile(uid, role, display_name)
-
-    # Send verification email — separate try so account creation isn't rolled back
-    email_sent, _verr = send_verification_email(user["idToken"])
-    if not email_sent:
-        print(f"[RehaTech] Verification email failed: {_verr}")
-
-    return user, None, email_sent
-
-def send_verification_email(id_token):
-    """Send verification email via Firebase Identity Toolkit v1 REST (more reliable)."""
-    api_key = firebase_config["apiKey"]
-    # Try v1 endpoint first (newer, more reliable)
-    url_v1 = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}"
-    payload = {"requestType": "VERIFY_EMAIL", "idToken": id_token}
-    headers = {"Content-Type": "application/json"}
-    try:
-        r = requests.post(url_v1, json=payload, headers=headers, timeout=10)
-        print(f"[RehaTech] sendOobCode v1 status: {r.status_code}, body: {r.text[:200]}")
-        if r.status_code == 200:
-            return True, None
-        # Fall back to v3 via Pyrebase
-        auth.send_email_verification(id_token)
-        return True, None
-    except Exception as e:
-        print(f"[RehaTech] send_verification_email error: {e}")
-        return False, str(e)
-
-def resend_verification(email, password):
-    """Sign in silently to get a fresh token, then resend verification email."""
-    try:
-        user = auth.sign_in_with_email_and_password(email, password)
-        ok, err = send_verification_email(user["idToken"])
-        return ok, err
-    except Exception as e:
-        return False, str(e)
+            return None, "Registration failed. Please try again." 
 
 # ==========================================
 # 1. PAGE CONFIGURATION & AESTHETICS
@@ -849,18 +802,7 @@ if st.session_state.auth_user is None:
                 else:
                     with st.spinner("Signing in..."):
                         _user, _err = do_login(_li_email.strip(), _li_pw)
-                    if _err == "EMAIL_NOT_VERIFIED":
-                        st.warning(
-                            "Your email is not verified yet. "
-                            "Check your inbox for the verification link."
-                        )
-                        if st.button("Resend verification email", key="resend_btn"):
-                            _resent, _rerr = resend_verification(_li_email.strip(), _li_pw)
-                            if _resent:
-                                st.success("Verification email resent! Check your inbox.")
-                            else:
-                                st.error(f"Could not resend — {_rerr or 'check your password.'}")
-                    elif _err:
+                    if _err:
                         st.error(_err)
                     else:
                         _uid  = _user["localId"]
@@ -959,37 +901,14 @@ if st.session_state.auth_user is None:
                     st.error("Password must be at least 6 characters.")
                 else:
                     with st.spinner("Creating account..."):
-                        _user, _err, _email_sent = do_register(
-                            _reg_email.strip(), _reg_pw,
-                            _reg_role, _reg_name.strip()
-                        )
+                        _user, _err = do_register(_reg_email.strip(), _reg_pw,
+                                                  _reg_role, _reg_name.strip())
                     if _err:
                         st.error(_err)
                     else:
-                        if _email_sent:
-                            st.success(
-                                f"Account created as {_reg_role}! "
-                                f"A verification email has been sent to **{_reg_email.strip()}**."
-                            )
-                            st.markdown("""
-                            <div style="background:#FEF9C3;border:1px solid #FDE68A;border-radius:10px;
-                                        padding:12px 16px;margin-top:8px;">
-                                <div style="font-size:0.82rem;font-weight:700;color:#92400E;margin-bottom:6px;">
-                                    📧 Next steps
-                                </div>
-                                <div style="font-size:0.78rem;color:#78350F;line-height:1.8;">
-                                    1. Check your inbox (and spam folder) for an email from<br>
-                                    &nbsp;&nbsp;&nbsp;<b>noreply@ems-project-7ea46.firebaseapp.com</b><br>
-                                    2. Click <b>Verify email address</b> in that email<br>
-                                    3. Return here and sign in with your credentials
-                                </div>
-                            </div>""", unsafe_allow_html=True)
-                        else:
-                            st.warning(
-                                f"Account created as {_reg_role}, but the verification email "
-                                f"could not be sent automatically. Use the Sign In tab, "
-                                f"enter your password, then click 'Resend verification email'."
-                            )
+                        st.success(
+                            f"Account created as {_reg_role}. "
+                            f"Switch to the Sign In tab to log in.")
             st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("""
