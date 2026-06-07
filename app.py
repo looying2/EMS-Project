@@ -2342,10 +2342,13 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
         """, unsafe_allow_html=True)
     st.markdown("---")
 
-    # ---------- Smart Alert Banner ----------
+        # ---------- Smart Alert Banner (only shown if an issue exists) ----------
     pain_val = st.session_state.get("live_pain", 0)
     fatigue_val = st.session_state.get("live_fatigue", 0)
     emg_status, _ = get_emg_status(latest_emg)
+
+    alert_color = None
+    alert_msg = None
 
     if pain_val > 7 or emg_status == "overexertion":
         alert_color = "#DC2626"
@@ -2353,15 +2356,13 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
     elif pain_val > 4 or fatigue_val > 7 or emg_status == "fatigue":
         alert_color = "#F59E0B"
         alert_msg = "⚠️ Moderate concern – Monitor pain, fatigue, or muscle activity."
-    else:
-        alert_color = "#10B981"
-        alert_msg = "✅ All clear – Session progressing normally."
 
-    st.markdown(f"""
-    <div style="background:{alert_color}; color:white; border-radius:12px; padding:12px; text-align:center; margin-bottom:20px;">
-        <strong>{alert_msg}</strong>
-    </div>
-    """, unsafe_allow_html=True)
+    if alert_msg:
+        st.markdown(f"""
+        <div style="background:{alert_color}; color:white; border-radius:12px; padding:12px; text-align:center; margin-bottom:20px;">
+            <strong>{alert_msg}</strong>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ---------- 4‑card live readings row ----------
     col1, col2, col3, col4 = st.columns(4)
