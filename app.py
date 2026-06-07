@@ -1578,99 +1578,98 @@ if user_role == "Doctor":
         
    # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
-        if st.session_state.session_summary_text:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("📝 AI Session Summary")
-    
-            summary = st.session_state.session_summary_text
-            if isinstance(summary, dict):
-        # Title
+    if st.session_state.session_summary_text:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("📝 AI Session Summary")
+        
+        summary = st.session_state.session_summary_text
+        if isinstance(summary, dict):
+            # Title
             st.markdown(f"## {summary.get('title', 'Clinical Session Summary')}")
-        # Summary paragraph
+            # Summary paragraph
             st.markdown(summary.get('summary', ''))
-        # Signal Interpretation
+            # Signal Interpretation
             st.markdown("### Signal Interpretation")
             for point in summary.get('interpretation', []):
                 st.markdown(f"- {point}")
-        # Recommended Actions
+            # Recommended Actions
             st.markdown("### Recommended Actions")
             for action in summary.get('actions', []):
                 st.markdown(f"- {action}")
-         else:
+        else:
             st.markdown(summary)  # fallback
-    
-         if st.button("Regenerate Summary", key="regenerate_summary"):
+
+        if st.button("Regenerate Summary", key="regenerate_summary"):
             st.session_state.session_summary_generated = False
             st.rerun()
-         st.markdown('</div>', unsafe_allow_html=True)
-    
-            st.divider()
-            st.subheader("🔐 Clinician Approval")
-            st.info("Review the AI-generated summary above before approving parameter changes for the next session.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            _col_approve, _col_decline = st.columns(2)
-            _session_id = st.session_state.get("current_session_id", None)
+        st.divider()
+        st.subheader("🔐 Clinician Approval")
+        st.info("Review the AI-generated summary above before approving parameter changes for the next session.")
 
-            with _col_approve:
-                if st.button("✅ Approve Recommendation", type="primary",
-                             use_container_width=True, key="btn_approve"):
-                    if _session_id:
-                        fb_write(
-                            f"patients/{patient_id}/sessions/{_session_id}/approval",
-                            {
-                                "status":    "approved",
-                                "clinician": user_role,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-                        )
-                    log_event(patient_id, "APPROVAL_GRANTED", f"Session={_session_id}")
-                    st.success("✅ Recommendation approved and saved to Firebase.")
+        _col_approve, _col_decline = st.columns(2)
+        _session_id = st.session_state.get("current_session_id", None)
 
-            with _col_decline:
-                if st.button("❌ Decline — Keep Current Parameters",
-                             use_container_width=True, key="btn_decline"):
-                    if _session_id:
-                        fb_write(
-                            f"patients/{patient_id}/sessions/{_session_id}/approval",
-                            {
-                                "status":    "declined",
-                                "clinician": user_role,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-                        )
-                    log_event(patient_id, "APPROVAL_DECLINED", f"Session={_session_id}")
-                    st.warning("❌ Declined. Current parameters will be retained.")
+        with _col_approve:
+            if st.button("✅ Approve Recommendation", type="primary",
+                         use_container_width=True, key="btn_approve"):
+                if _session_id:
+                    fb_write(
+                        f"patients/{patient_id}/sessions/{_session_id}/approval",
+                        {
+                            "status":    "approved",
+                            "clinician": user_role,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                    )
+                log_event(patient_id, "APPROVAL_GRANTED", f"Session={_session_id}")
+                st.success("✅ Recommendation approved and saved to Firebase.")
 
-            # Live approval status from Firebase
-            if _session_id:
-                try:
-                    _ap = fb_read(f"patients/{patient_id}/sessions/{_session_id}/approval")
-                    if _ap and isinstance(_ap, dict):
-                        _ts = _ap.get("timestamp", "—")
-                        _by = _ap.get("clinician", "—")
-                        if _ap.get("status") == "approved":
-                            st.markdown(f"""
-                            <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;
-                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
-                                <span style="font-size:1.2rem;">✅</span>
-                                <div>
-                                    <div style="font-size:0.82rem;font-weight:700;color:#15803D;">Last Decision: Approved</div>
-                                    <div style="font-size:0.75rem;color:#166534;">{_ts} &nbsp;·&nbsp; {_by}</div>
-                                </div>
-                            </div>""", unsafe_allow_html=True)
-                        elif _ap.get("status") == "declined":
-                            st.markdown(f"""
-                            <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;
-                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
-                                <span style="font-size:1.2rem;">❌</span>
-                                <div>
-                                    <div style="font-size:0.82rem;font-weight:700;color:#92400E;">Last Decision: Declined</div>
-                                    <div style="font-size:0.75rem;color:#78350F;">{_ts} &nbsp;·&nbsp; {_by}</div>
-                                </div>
-                            </div>""", unsafe_allow_html=True)
-                except Exception:
-                    pass
+        with _col_decline:
+            if st.button("❌ Decline — Keep Current Parameters",
+                         use_container_width=True, key="btn_decline"):
+                if _session_id:
+                    fb_write(
+                        f"patients/{patient_id}/sessions/{_session_id}/approval",
+                        {
+                            "status":    "declined",
+                            "clinician": user_role,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                    )
+                log_event(patient_id, "APPROVAL_DECLINED", f"Session={_session_id}")
+                st.warning("❌ Declined. Current parameters will be retained.")
 
+        # Live approval status from Firebase
+        if _session_id:
+            try:
+                _ap = fb_read(f"patients/{patient_id}/sessions/{_session_id}/approval")
+                if _ap and isinstance(_ap, dict):
+                    _ts = _ap.get("timestamp", "—")
+                    _by = _ap.get("clinician", "—")
+                    if _ap.get("status") == "approved":
+                        st.markdown(f"""
+                        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;
+                                    padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:1.2rem;">✅</span>
+                            <div>
+                                <div style="font-size:0.82rem;font-weight:700;color:#15803D;">Last Decision: Approved</div>
+                                <div style="font-size:0.75rem;color:#166534;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+                    elif _ap.get("status") == "declined":
+                        st.markdown(f"""
+                        <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;
+                                    padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:1.2rem;">❌</span>
+                            <div>
+                                <div style="font-size:0.82rem;font-weight:700;color:#92400E;">Last Decision: Declined</div>
+                                <div style="font-size:0.75rem;color:#78350F;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+            except Exception:
+                pass
             st.markdown('</div>', unsafe_allow_html=True)
 
         # =====================================================
