@@ -1120,7 +1120,7 @@ if user_role == "Doctor":
         ["🩺 Live & AI", "🧬 Body Composition", "⚙️ Device Control", "📋 Records & Reports", "💬 Clinical AI Chat"]
     )
 
-    # ---------- TAB 1: LIVE & AI ----------
+        # ---------- TAB 1: LIVE & AI ----------
     with tab_live_ai:
         tele = st.session_state.telemetry
         latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
@@ -1159,8 +1159,12 @@ if user_role == "Doctor":
                 st.write(f"ESP32 State: {state}")
     
         st.markdown("---")
-        col_rag, col_ml = st.columns(2)
-        with col_rag:
+        
+        # Two columns: left = Safety + Feedback, right = ML Engine
+        col_left, col_ml = st.columns(2)
+
+        with col_left:
+            # ── Safety & Optimization Rules ────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("Safety & Optimization (Rules)")
             if st.session_state.system_status == "ACTIVE":
@@ -1175,9 +1179,24 @@ if user_role == "Doctor":
             else:
                 st.caption("System Inactive - Start session to monitor safety rules.")
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
+            # ── Patient Feedback (now directly below safety rules) ─────────
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("💬 Patient Feedback")
+            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
+            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
+            if pain > 7:
+                st.error("🚨 High pain – consider reducing intensity.")
+            elif pain > 4:
+                st.warning("⚠️ Moderate pain – monitor closely.")
+            else:
+                st.success("✅ Pain acceptable.")
+            if fatigue > 7:
+                st.info("💤 High fatigue – suggest longer rest periods.")
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col_ml:
+            # ── ML Engine (unchanged) ───────────────────────────────────────
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("Gait Pathology (ML Engine)")
             if st.session_state.get("ml_pending", False):
@@ -1187,11 +1206,9 @@ if user_role == "Doctor":
             prob = st.session_state.ml_probability
 
             if st.session_state.system_status == "ACTIVE":
-
                 ERROR_PREFIXES = ("API Timeout", "API Offline", "API Error", "Invalid API Response")
                 is_error = any(res.startswith(p) for p in ERROR_PREFIXES) if isinstance(res, str) else False
 
-                # Show loading placeholder until first real result arrives
                 if res in ("WAITING", ""):
                     st.markdown("""
                     <div style="text-align:center; padding:40px 0; color:#94A3B8;">
@@ -1200,12 +1217,11 @@ if user_role == "Doctor":
                         <div style="font-size:0.8rem; margin-top:6px;">The ML engine is reading the latest EMG data.</div>
                     </div>
                     """, unsafe_allow_html=True)
-
                 elif is_error:
                     icon = "⏱️" if "Timeout" in res else "📡" if "Offline" in res else "⚠️"
-                    tip  = "The ngrok tunnel may be down or the Flask backend is not running." if "Offline" in res else \
-                           "The backend took too long to respond. It will retry automatically." if "Timeout" in res else \
-                           "Check the backend logs for details."
+                    tip = ("The ngrok tunnel may be down or the Flask backend is not running." if "Offline" in res else
+                           "The backend took too long to respond. It will retry automatically." if "Timeout" in res else
+                           "Check the backend logs for details.")
                     st.markdown(f"""
                     <div style="background:#FFF8E1; border:1px solid #FFD54F; border-radius:12px;
                                 padding:20px; text-align:center; color:#7B4F00;">
@@ -1217,7 +1233,6 @@ if user_role == "Doctor":
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-
                 else:
                     latest = st.session_state.get("ml_latest", {})
                     session = st.session_state.get("ml_session", {})
@@ -1231,14 +1246,10 @@ if user_role == "Doctor":
                     conf_pct   = prob * 100 if prob <= 1.0 else prob
                     conf_fill  = max(0.0, min(conf_pct, 100.0))
 
-                    if conf_pct >= 75:
-                        conf_note = "High confidence. The model result is relatively stable for this reading."
-                    elif conf_pct >= 50:
-                        conf_note = "Moderate confidence. Consider monitoring additional readings."
-                    else:
-                        conf_note = "Low confidence. Result may be unreliable — check sensor placement."
+                    conf_note = ("High confidence. The model result is relatively stable for this reading." if conf_pct >= 75 else
+                                 "Moderate confidence. Consider monitoring additional readings." if conf_pct >= 50 else
+                                 "Low confidence. Result may be unreliable — check sensor placement.")
 
-                    # ── Predicted Class + Confidence ──────────────────────────
                     st.markdown(f"""
                     <div style="margin-bottom:16px;">
                         <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
@@ -1270,46 +1281,35 @@ if user_role == "Doctor":
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # ── Three feature metric cards ─────────────────────────────
                     if latest:
                         rms_val    = latest.get('rms_recto_femoral', 0)
                         spread_val = latest.get('rms_signal_spread', 0)
                         std_val    = latest.get('rms_signal_std', 0)
-
                         st.markdown(f"""
                         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px;">
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     RECTO FEMORIS RMS
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{rms_val:.2f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{rms_val:.2f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Average EMG level from the recto femoris sensor in the latest cleaned 1-second window.
                                 </div>
                             </div>
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     SIGNAL SPREAD
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{spread_val:.0f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{spread_val:.0f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Formula: max − min after cleaning. Shows the signal range within the 1-second window.
                                 </div>
                             </div>
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0;
-                                        border-radius:12px; padding:14px 10px;">
-                                <div style="font-size:0.68rem; font-weight:700; color:#78909C;
-                                            letter-spacing:0.07em; margin-bottom:6px;">
+                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 10px;">
+                                <div style="font-size:0.68rem; font-weight:700; color:#78909C; letter-spacing:0.07em; margin-bottom:6px;">
                                     SIGNAL STD
                                 </div>
-                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A;
-                                            margin-bottom:6px;">{std_val:.4f}</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:#0F172A; margin-bottom:6px;">{std_val:.4f}</div>
                                 <div style="font-size:0.72rem; color:#94A3B8; line-height:1.4;">
                                     Standard deviation of cleaned EMG samples. Shows how much the signal fluctuates around the average.
                                 </div>
@@ -1317,7 +1317,6 @@ if user_role == "Doctor":
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # ── Probability bars ───────────────────────────────────────
                     if probabilities:
                         st.markdown("**Prediction Probability**")
                         for p in probabilities:
@@ -1325,13 +1324,11 @@ if user_role == "Doctor":
                             prob_p  = float(p.get("probability", 0))
                             st.progress(prob_p / 100, text=f"{label_p}: {prob_p:.2f}%")
 
-                    # ── Session Summary row ────────────────────────────────────
                     if session:
                         st.markdown(f"""
                         <div style="background:#F1F5F9; border:1px solid #E2E8F0; border-radius:10px;
                                     padding:12px 16px; margin:10px 0;">
-                            <div style="font-weight:700; font-size:0.9rem; color:#1E293B;
-                                        margin-bottom:4px;">Session Summary</div>
+                            <div style="font-weight:700; font-size:0.9rem; color:#1E293B; margin-bottom:4px;">Session Summary</div>
                             <div style="font-size:0.85rem; color:#475569;">
                                 Readings: <strong>{session.get('count', '—')}</strong> &nbsp;|&nbsp;
                                 Average: <strong>{session.get('avg', '—')}</strong> &nbsp;|&nbsp;
@@ -1341,7 +1338,6 @@ if user_role == "Doctor":
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # ── AI Summary expander ────────────────────────────────────
                     if summary:
                         with st.expander("📋 AI Summary & Recommendations"):
                             st.markdown(f"**{summary.get('title', '')}**")
@@ -1357,25 +1353,10 @@ if user_role == "Doctor":
                             disclaimer = summary.get('disclaimer', '')
                             if disclaimer:
                                 st.caption(f"*Note: {disclaimer}*")
-
             else:
                 st.info("Start session to enable ML analysis.")
 
             st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown("### 💬 Patient Feedback")
-        col_feedback = st.columns(1)[0]
-        with col_feedback:
-            pain = st.slider("Pain Score (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="live_pain")
-            fatigue = st.slider("Fatigue Level (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="live_fatigue")
-            if pain > 7:
-                st.error("🚨 High pain – consider reducing intensity.")
-            elif pain > 4:
-                st.warning("⚠️ Moderate pain – monitor closely.")
-            else:
-                st.success("✅ Pain acceptable.")
-            if fatigue > 7:
-                st.info("💤 High fatigue – suggest longer rest periods.")
 
     # ---------- TAB 2: BODY COMPOSITION ----------
     with tab_body:
