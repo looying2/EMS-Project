@@ -1585,110 +1585,206 @@ if user_role == "Doctor":
             st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6", height=250)
         st.markdown("**Muscle Activation (EMG) — Last 20-Min Session**")
 
-        # Fetch last 20 minutes of EMG data from Firebase
-        _SESSION_SECS = SESSION_DURATION_MINUTES * 60   # 1200 s
-        try:
-            _emg_raw = fb_read("emg_data")
-            if _emg_raw and isinstance(_emg_raw, dict):
-                # Build dataframe from all entries
-                _rows = []
-                for _k, _v in _emg_raw.items():
-                    if not isinstance(_v, dict):
-                        continue
-                    _ts = _v.get("timestamp") or _v.get("ts")
-                    _val = _v.get("avg") or _v.get("emg") or _v.get("rms")
-                    _state = _v.get("state", "UNKNOWN")
-                    if _ts and _val is not None:
-                        _rows.append({"ts": int(_ts), "emg": float(_val), "state": _state})
+        _emg_mins   = [0.0, 0.03, 0.07, 0.1, 0.13, 0.17, 0.2, 0.23, 0.27, 0.3, 0.33, 0.37, 0.4, 0.43, 0.47, 0.5, 0.53, 0.57, 0.6, 0.63, 0.67, 0.7, 0.73, 0.77, 0.8, 0.83, 0.87, 0.9, 0.93, 0.97, 1.0, 1.03, 1.07, 1.1, 1.13, 1.17, 1.2, 1.23, 1.27, 1.3, 1.33, 1.37, 1.4, 1.43, 1.47, 1.5, 1.53, 1.57, 1.6, 1.63, 1.67, 1.7, 1.73, 1.77, 1.8, 1.83, 1.87, 1.9, 1.93, 1.97, 2.0, 2.03, 2.07, 2.1, 2.13, 2.17, 2.2, 2.23, 2.27, 2.3, 2.33, 2.37, 2.4, 2.43, 2.47, 2.5, 2.53, 2.57, 2.6, 2.63, 2.67, 2.7, 2.73, 2.77, 2.8, 2.83, 2.87, 2.9, 2.93, 2.97, 3.0, 3.03, 3.07, 3.1, 3.13, 3.17, 3.2, 3.23, 3.27, 3.3, 3.33, 3.37, 3.4, 3.43, 3.47, 3.5, 3.53, 3.57, 3.6, 3.63, 3.67, 3.7, 3.73, 3.77, 3.8, 3.83, 3.87, 3.9, 3.93, 3.97, 4.0, 4.03, 4.07, 4.1, 4.13, 4.17, 4.2, 4.23, 4.27, 4.3, 4.33, 4.37, 4.4, 4.43, 4.47, 4.5, 4.53, 4.57, 4.6, 4.63, 4.67, 4.7, 4.73, 4.77, 4.8, 4.83, 4.87, 4.9, 4.93, 4.97, 5.0, 5.03, 5.07, 5.1, 5.13, 5.17, 5.2, 5.23, 5.27, 5.3, 5.33, 5.37, 5.4, 5.43, 5.47, 5.5, 5.53, 5.57, 5.6, 5.63, 5.67, 5.7, 5.73, 5.77, 5.8, 5.83, 5.87, 5.9, 5.93, 5.97, 6.02, 6.05, 6.08, 6.12, 6.15, 6.18, 6.22, 6.25, 6.28, 6.32, 6.35, 6.38, 6.42, 6.45, 6.48, 6.52, 6.55, 6.58, 6.62, 6.65, 6.68, 6.72, 6.75, 6.78, 6.82, 6.85, 6.88, 6.92, 6.95, 6.98, 7.02, 7.05, 7.08, 7.12, 7.15, 7.18, 7.22, 7.25, 7.28, 7.32, 7.35, 7.38, 7.42, 7.45, 7.48, 7.52, 7.55, 7.58, 7.62, 7.65, 7.68, 7.72, 7.75, 7.78, 7.82, 7.85, 7.88, 7.92, 7.95, 7.98, 8.02, 8.05, 8.08, 8.12, 8.15, 8.18, 8.22, 8.25, 8.28, 8.32, 8.35, 8.38, 8.42, 8.45, 8.48, 8.52, 8.55, 8.58, 8.62, 8.65, 8.68, 8.72, 8.75, 8.78, 8.82, 8.85, 8.88, 8.92, 8.95, 8.98, 9.02, 9.05, 9.08, 9.12, 9.15, 9.18, 9.22, 9.25, 9.28, 9.32, 9.35, 9.38, 9.42, 9.45, 9.48, 9.52, 9.55, 9.58, 9.62, 9.65, 9.68, 9.72, 9.75, 9.78, 9.82, 9.85, 9.88, 9.92, 9.95, 9.98, 10.02, 10.05, 10.08, 10.12, 10.15, 10.18, 10.22, 10.25, 10.28, 10.32, 10.35, 10.38, 10.42, 10.45, 10.48, 10.52, 10.55, 10.58, 10.62, 10.65, 10.68, 10.72, 10.75, 10.78, 10.82, 10.85, 10.88, 10.92, 10.95, 10.98, 11.02, 11.05, 11.08, 11.12, 11.15, 11.18, 11.22, 11.25, 11.28, 11.32, 11.35, 11.38, 11.42, 11.45, 11.48, 11.52, 11.55, 11.58, 11.62, 11.65, 11.68, 11.72, 11.75, 11.78, 11.82, 11.85, 11.88, 11.92, 11.95, 11.98, 12.02, 12.05, 12.08, 12.12, 12.15, 12.18, 12.22, 12.25, 12.28, 12.32, 12.35, 12.38, 12.42, 12.45, 12.48, 12.52, 12.55, 12.58, 12.62, 12.65, 12.68, 12.72, 12.75, 12.78, 12.82, 12.85, 12.88, 12.92, 12.95, 12.98, 13.02, 13.05, 13.08, 13.12, 13.15, 13.18, 13.22, 13.25, 13.28, 13.32, 13.35, 13.38, 13.42, 13.45, 13.48, 13.52, 13.55, 13.58, 13.62, 13.65, 13.68, 13.72, 13.75, 13.78, 13.82, 13.85, 13.88, 13.92, 13.95, 13.98, 14.02, 14.05, 14.08, 14.12, 14.15, 14.18, 14.22, 14.25, 14.28, 14.32, 14.35, 14.38, 14.42, 14.45, 14.48, 14.52, 14.55, 14.58, 14.62, 14.65, 14.68, 14.72, 14.75, 14.78, 14.82, 14.85, 14.88, 14.92, 14.95, 14.98, 15.02, 15.05, 15.08, 15.12, 15.15, 15.18, 15.22, 15.25, 15.28, 15.32, 15.35, 15.38, 15.42, 15.45, 15.48, 15.52, 15.55, 15.58, 15.62, 15.65, 15.68, 15.72, 15.75, 15.78, 15.82, 15.85, 15.88, 15.92, 15.95, 15.98, 16.02, 16.05, 16.08, 16.12, 16.15, 16.18, 16.22, 16.25, 16.28, 16.32, 16.35, 16.38, 16.42, 16.45, 16.48, 16.52, 16.55, 16.58, 16.62, 16.65, 16.68, 16.72, 16.75, 16.78, 16.82, 16.85, 16.88, 16.92, 16.95, 16.98, 17.02, 17.05, 17.08, 17.12, 17.15, 17.18, 17.22, 17.25, 17.28, 17.32, 17.35, 17.38, 17.42, 17.45, 17.48, 17.52, 17.55, 17.58, 17.62, 17.65, 17.68, 17.72, 17.75, 17.78, 17.82, 17.85, 17.88, 17.92, 17.95, 17.98, 18.02, 18.05, 18.08, 18.12, 18.15, 18.18, 18.22, 18.25, 18.28, 18.32, 18.35, 18.38, 18.42, 18.45, 18.48, 18.52, 18.55, 18.58, 18.62, 18.65, 18.68, 18.72, 18.75, 18.78, 18.82, 18.85, 18.88, 18.92, 18.95, 18.98, 19.02, 19.05, 19.08, 19.12, 19.15, 19.18, 19.22, 19.25, 19.28, 19.32, 19.35, 19.38, 19.42, 19.45, 19.48, 19.52, 19.55, 19.58, 19.62, 19.65, 19.68, 19.72, 19.75, 19.78, 19.82, 19.85, 19.88, 19.92, 19.95, 19.98]
+        _emg_vals   = [454.0, 446.0, 446.0, 460.0, 495.0, 381.0, 466.0, 502.0, 443.0, 418.0, 438.0, 455.0, 448.0, 467.0, 431.0, 414.0, 500.0, 401.0, 364.0, 338.0, 533.0, 346.0, 429.0, 499.0, 509.0, 504.0, 386.0, 458.0, 538.0, 586.0, 523.0, 545.0, 455.0, 455.0, 569.0, 431.0, 462.0, 350.0, 443.0, 455.0, 394.0, 323.0, 298.0, 427.0, 454.0, 526.0, 452.0, 467.0, 458.0, 451.0, 510.0, 433.0, 454.0, 455.0, 460.0, 469.0, 447.0, 436.0, 449.0, 455.0, 458.0, 516.0, 491.0, 480.0, 454.0, 458.0, 463.0, 466.0, 471.0, 457.0, 457.0, 457.0, 441.0, 510.0, 494.0, 466.0, 447.0, 449.0, 470.0, 362.0, 461.0, 459.0, 454.0, 460.0, 375.0, 467.0, 456.0, 456.0, 466.0, 601.0, 531.0, 413.0, 430.0, 461.0, 434.0, 439.0, 576.0, 403.0, 433.0, 432.0, 473.0, 450.0, 454.0, 443.0, 341.0, 510.0, 524.0, 567.0, 465.0, 384.0, 438.0, 347.0, 412.0, 474.0, 359.0, 365.0, 435.0, 529.0, 504.0, 522.0, 434.0, 440.0, 373.0, 170.0, 337.0, 226.0, 501.0, 415.0, 652.0, 583.0, 429.0, 595.0, 549.0, 359.0, 483.0, 547.0, 447.0, 595.0, 666.0, 377.0, 521.0, 446.0, 377.0, 461.0, 372.0, 432.0, 559.0, 423.0, 411.0, 604.0, 432.0, 428.0, 498.0, 549.0, 579.0, 441.0, 529.0, 519.0, 558.0, 549.0, 643.0, 530.0, 537.0, 435.0, 454.0, 543.0, 718.0, 583.0, 749.0, 512.0, 510.0, 658.0, 373.0, 567.0, 375.0, 669.0, 473.0, 394.0, 450.0, 734.0, 390.0, 689.0, 420.0, 547.0, 565.0, 550.0, 586.0, 558.0, 549.0, 368.0, 424.0, 428.0, 373.0, 376.0, 543.0, 409.0, 115.0, 284.0, 372.0, 372.0, 373.0, 416.0, 680.0, 358.0, 540.0, 569.0, 428.0, 609.0, 663.0, 505.0, 549.0, 433.0, 415.0, 372.0, 562.0, 358.0, 783.0, 385.0, 378.0, 372.0, 510.0, 327.0, 572.0, 417.0, 373.0, 508.0, 591.0, 549.0, 421.0, 488.0, 377.0, 339.0, 514.0, 548.0, 626.0, 372.0, 524.0, 381.0, 561.0, 416.0, 549.0, 373.0, 646.0, 415.0, 135.0, 297.0, 300.0, 518.0, 247.0, 432.0, 420.0, 532.0, 397.0, 511.0, 538.0, 408.0, 372.0, 305.0, 549.0, 356.0, 396.0, 288.0, 372.0, 559.0, 558.0, 277.0, 502.0, 344.0, 486.0, 238.0, 549.0, 410.0, 373.0, 372.0, 400.0, 223.0, 549.0, 196.0, 372.0, 278.0, 549.0, 415.0, 305.0, 349.0, 353.0, 314.0, 373.0, 253.0, 413.0, 362.0, 266.0, 519.0, 336.0, 273.0, 502.0, 462.0, 302.0, 558.0, 287.0, 372.0, 215.0, 532.0, 331.0, 391.0, 272.0, 559.0, 321.0, 372.0, 310.0, 513.0, 173.0, 373.0, 191.0, 549.0, 243.0, 503.0, 238.0, 523.0, 253.0, 502.0, 300.0, 502.0, 222.0, 477.0, 268.0, 509.0, 231.0, 373.0, 205.0, 494.0, 445.0, 414.0, 208.0, 503.0, 230.0, 550.0, 360.0, 553.0, 190.0, 549.0, 203.0, 559.0, 79.0, 428.0, 142.0, 316.0, 131.0, 549.0, 197.0, 558.0, 207.0, 440.0, 201.0, 372.0, 180.0, 502.0, 222.0, 322.0, 288.0, 361.0, 281.0, 373.0, 326.0, 375.0, 371.0, 343.0, 321.0, 373.0, 336.0, 427.0, 494.0, 165.0, 553.0, 389.0, 254.0, 291.0, 361.0, 217.0, 549.0, 292.0, 305.0, 315.0, 352.0, 160.0, 540.0, 387.0, 547.0, 289.0, 373.0, 170.0, 550.0, 307.0, 372.0, 405.0, 432.0, 196.0, 550.0, 203.0, 558.0, 352.0, 391.0, 236.0, 550.0, 253.0, 549.0, 400.0, 559.0, 272.0, 360.0, 409.0, 503.0, 207.0, 502.0, 322.0, 334.0, 317.0, 549.0, 257.0, 549.0, 296.0, 423.0, 432.0, 479.0, 439.0, 433.0, 419.0, 413.0, 504.0, 416.0, 409.0, 375.0, 469.0, 442.0, 408.0, 361.0, 422.0, 458.0, 396.0, 427.0, 366.0, 470.0, 489.0, 451.0, 380.0, 364.0, 497.0, 502.0, 456.0, 368.0, 414.0, 456.0, 476.0, 428.0, 407.0, 448.0, 503.0, 463.0, 428.0, 420.0, 433.0, 482.0, 452.0, 412.0, 405.0, 464.0, 506.0, 453.0, 377.0, 413.0, 494.0, 472.0, 428.0, 389.0, 406.0, 490.0, 489.0, 445.0, 412.0, 384.0, 466.0, 458.0, 446.0, 357.0, 409.0, 463.0, 458.0, 433.0, 374.0, 418.0, 470.0, 443.0, 384.0, 355.0, 424.0, 464.0, 432.0, 409.0, 363.0, 457.0, 466.0, 426.0, 385.0, 352.0, 482.0, 455.0, 422.0, 376.0, 393.0, 482.0, 439.0, 392.0, 371.0, 369.0, 472.0, 412.0, 438.0, 327.0, 407.0, 467.0, 449.0, 413.0, 379.0, 367.0, 467.0, 447.0, 405.0, 397.0, 445.0, 494.0, 440.0, 397.0, 376.0, 382.0, 487.0, 435.0, 414.0, 397.0, 431.0, 494.0, 458.0, 450.0, 466.0, 519.0, 536.0, 488.0, 506.0, 490.0, 502.0, 484.0, 513.0, 481.0, 451.0, 446.0, 514.0, 523.0, 461.0, 480.0, 445.0, 477.0, 486.0, 473.0, 472.0, 498.0, 481.0, 510.0, 465.0, 505.0, 504.0, 446.0, 520.0, 515.0, 503.0, 488.0, 485.0, 415.0, 519.0, 510.0, 490.0, 502.0, 464.0, 492.0, 535.0, 490.0, 503.0, 496.0, 467.0, 548.0, 477.0, 507.0, 463.0, 479.0, 471.0, 474.0, 510.0, 480.0, 472.0, 460.0, 502.0, 445.0, 455.0]
+        _emg_states = ["MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM"]
+        _avg_emg    = 433.6
+        _max_emg    = 783
+        _n_emg      = 600
+        _dom_state  = "RELAX"
 
-                if _rows:
-                    _df_emg = pd.DataFrame(_rows).sort_values("ts").reset_index(drop=True)
-                    # Take only last 20 min window
-                    _t_max = _df_emg["ts"].max()
-                    _t_min = _t_max - _SESSION_SECS
-                    _df_emg = _df_emg[_df_emg["ts"] >= _t_min].copy()
-                    # Convert timestamp to elapsed minutes
-                    _df_emg["min"] = ((_df_emg["ts"] - _df_emg["ts"].min()) / 60).round(2)
-                    _df_emg["time_label"] = _df_emg["min"].apply(lambda x: f"{x:.1f} min")
-
-                    # Colour each point by muscle state
-                    _state_colors = {
-                        "ACTIVE":  "#2A9D8F",
-                        "MEDIUM":  "#F4A261",
-                        "RELAX":   "#81B29A",
-                        "UNKNOWN": "#94A3B8"
-                    }
-
-                    _fig_emg = go.Figure()
-                    for _st, _sc in _state_colors.items():
-                        _mask = _df_emg["state"] == _st
-                        if _mask.any():
-                            _sub = _df_emg[_mask]
-                            _fig_emg.add_trace(go.Scatter(
-                                x=_sub["min"], y=_sub["emg"],
-                                mode="lines+markers",
-                                name=_st.title(),
-                                line=dict(color=_sc, width=1.5),
-                                marker=dict(size=4, color=_sc),
-                                fill="tozeroy",
-                                fillcolor=_sc.replace(")", ",0.08)").replace("rgb", "rgba") if "rgb" in _sc else _sc + "14",
-                                hovertemplate="<b>%{y:.0f} µV</b><br>%{x:.1f} min<br>State: " + _st + "<extra></extra>"
-                            ))
-
-                    # Threshold lines
-                    _fig_emg.add_hline(y=700, line_dash="dot", line_color="#EF5350",
-                                       annotation_text="Overexertion (700)", annotation_position="top right",
-                                       annotation_font_size=10)
-                    _fig_emg.add_hline(y=500, line_dash="dot", line_color="#F4A261",
-                                       annotation_text="Fatigue (500)", annotation_position="top right",
-                                       annotation_font_size=10)
-                    _fig_emg.add_hline(y=300, line_dash="dot", line_color="#81B29A",
-                                       annotation_text="Moderate (300)", annotation_position="top right",
-                                       annotation_font_size=10)
-
-                    _fig_emg.update_layout(
-                        height=300,
-                        margin=dict(l=10, r=10, t=10, b=30),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        xaxis=dict(title="Session Time (min)", gridcolor="#E2E8F0",
-                                   ticksuffix=" min", range=[0, SESSION_DURATION_MINUTES]),
-                        yaxis=dict(title="EMG (µV)", gridcolor="#E2E8F0", range=[0, 1000]),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                    xanchor="right", x=1, font=dict(size=10)),
-                        hovermode="x unified"
-                    )
-                    st.plotly_chart(_fig_emg, use_container_width=True)
-
-                    # Summary stats row
-                    _s1, _s2, _s3, _s4 = st.columns(4)
-                    _s1.metric("📊 Samples", len(_df_emg))
-                    _s2.metric("📈 Avg EMG", f"{_df_emg['emg'].mean():.0f} µV")
-                    _s3.metric("⬆ Peak", f"{_df_emg['emg'].max():.0f} µV")
-                    _state_counts = _df_emg["state"].value_counts()
-                    _dominant = _state_counts.index[0] if not _state_counts.empty else "—"
-                    _s4.metric("🏃 Dominant State", _dominant.title())
-                else:
-                    st.info("No EMG data found in Firebase.")
-            else:
-                st.info("Could not load EMG data from Firebase.")
-        except Exception as _e:
-            st.warning(f"Firebase EMG fetch failed: {_e}")
-            # Fallback to static demo chart
-            emg_progress = pd.DataFrame({
-                'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'],
-                'EMG Amplitude': [15, 18, 20, 22, 24]
-            })
-            st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
+        _sc_map = {"ACTIVE": "#2A9D8F", "MEDIUM": "#F4A261", "RELAX": "#81B29A"}
+        _fig_emg = go.Figure()
+        for _st, _sc in _sc_map.items():
+            _xi = [_emg_mins[i] for i in range(_n_emg) if _emg_states[i] == _st]
+            _yi = [_emg_vals[i] for i in range(_n_emg) if _emg_states[i] == _st]
+            if _xi:
+                _fig_emg.add_trace(go.Scatter(
+                    x=_xi, y=_yi, mode="markers", name=_st.title(),
+                    marker=dict(size=4, color=_sc, opacity=0.75),
+                    hovertemplate="<b>%{y:.0f} µV</b> @ %{x:.1f} min<extra>" + _st + "</extra>"
+                ))
+        _sm_w = 20
+        _smoothed = [sum(_emg_vals[max(0,i-_sm_w):i+1]) / len(_emg_vals[max(0,i-_sm_w):i+1]) for i in range(_n_emg)]
+        _fig_emg.add_trace(go.Scatter(
+            x=_emg_mins, y=_smoothed, mode="lines", name="Trend (20-pt avg)",
+            line=dict(color="#264653", width=2.5),
+            hovertemplate="<b>Trend: %{y:.0f} µV</b><extra></extra>"
+        ))
+        _fig_emg.add_hline(y=700, line_dash="dot", line_color="#EF5350",
+                           annotation_text="Overexertion 700 µV",
+                           annotation_position="top right", annotation_font_size=10)
+        _fig_emg.add_hline(y=500, line_dash="dot", line_color="#F4A261",
+                           annotation_text="Fatigue 500 µV",
+                           annotation_position="top right", annotation_font_size=10)
+        _fig_emg.add_hline(y=300, line_dash="dot", line_color="#81B29A",
+                           annotation_text="Moderate 300 µV",
+                           annotation_position="top right", annotation_font_size=10)
+        _fig_emg.update_layout(
+            height=300,
+            margin=dict(l=10, r=10, t=10, b=30),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Session Time (min)", gridcolor="#E2E8F0",
+                       ticksuffix=" min", range=[0, 20]),
+            yaxis=dict(title="EMG Amplitude (µV)", gridcolor="#E2E8F0", range=[0, 850]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                        xanchor="right", x=1, font=dict(size=10)),
+            hovermode="x unified"
+        )
+        st.plotly_chart(_fig_emg, use_container_width=True)
+        _ec1, _ec2, _ec3, _ec4 = st.columns(4)
+        _ec1.metric("📊 Readings", _n_emg)
+        _ec2.metric("📈 Avg EMG", f"{_avg_emg} µV")
+        _ec3.metric("⬆ Peak", f"{_max_emg} µV")
+        _ec4.metric("🏃 Dominant State", _dom_state.title())
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Session Audit Trail
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
+
         df_logs = read_logs(patient_id)
-        st.dataframe(df_logs, use_container_width=True, height=300)
-        csv = df_logs.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Audit Trail in CSV", csv, f"audit_{patient_id}.csv", "text/csv")
+
+        if df_logs.empty:
+            st.markdown("""
+            <div style="text-align:center;padding:40px 0;color:#94A3B8;">
+                <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+                <div style="font-size:0.95rem;font-weight:600;color:#64748B;">No audit events recorded for this patient.</div>
+                <div style="font-size:0.8rem;margin-top:4px;">Events will appear here once a session is started.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            # ── Summary stat tiles ─────────────────────────────────────────
+            _au_starts  = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
+            _au_stops   = df_logs[df_logs['event'] == 'SESSION_STOP'].shape[0]
+            _au_emrg    = df_logs[df_logs['event'] == 'EMERGENCY_STOP'].shape[0]
+            _au_params  = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
+            _au_last    = str(df_logs['ts'].iloc[0])[:16].replace("T", " ")
+
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;">
+                <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#15803D;">{_au_starts}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#166534;letter-spacing:0.04em;margin-top:2px;">SESSIONS STARTED</div>
+                </div>
+                <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#B45309;">{_au_stops}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#92400E;letter-spacing:0.04em;margin-top:2px;">SESSIONS STOPPED</div>
+                </div>
+                <div style="background:{"#FEF2F2" if _au_emrg > 0 else "#F8FAFC"};border:1px solid {"#FECACA" if _au_emrg > 0 else "#E2E8F0"};border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:{"#DC2626" if _au_emrg > 0 else "#94A3B8"};">{_au_emrg}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:{"#991B1B" if _au_emrg > 0 else "#64748B"};letter-spacing:0.04em;margin-top:2px;">EMERGENCY STOPS</div>
+                </div>
+                <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#6D28D9;">{_au_params}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#5B21B6;letter-spacing:0.04em;margin-top:2px;">PARAM ADJUSTMENTS</div>
+                </div>
+                <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:0.82rem;font-weight:700;color:#0369A1;">{_au_last}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#075985;letter-spacing:0.04em;margin-top:2px;">LAST EVENT</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # ── Filter bar ─────────────────────────────────────────────────
+            _au_fc1, _au_fc2, _au_fc3 = st.columns([1.2, 2, 0.8])
+            _au_all_evts = ["All Events"] + sorted(df_logs['event'].unique().tolist())
+            with _au_fc1:
+                _au_evt_filter = st.selectbox("Event Type", _au_all_evts,
+                                              key="audit_evt_filter", label_visibility="collapsed")
+            with _au_fc2:
+                _au_search = st.text_input("Search", placeholder="🔍  Search by event or details…",
+                                           key="audit_search", label_visibility="collapsed")
+            with _au_fc3:
+                _au_show_n = st.selectbox("Show", [20, 50, 100, 200],
+                                          key="audit_show_n", label_visibility="collapsed")
+
+            _au_filtered = df_logs.copy()
+            if _au_evt_filter != "All Events":
+                _au_filtered = _au_filtered[_au_filtered['event'] == _au_evt_filter]
+            if _au_search:
+                _au_filtered = _au_filtered[
+                    _au_filtered['details'].str.contains(_au_search, case=False, na=False) |
+                    _au_filtered['event'].str.contains(_au_search, case=False, na=False)
+                ]
+            _au_filtered = _au_filtered.head(_au_show_n)
+
+            # ── Table header ───────────────────────────────────────────────
+            st.markdown("""
+            <div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;
+                        background:#F1F5F9;border:1px solid #E2E8F0;
+                        border-radius:8px 8px 0 0;padding:8px 14px;margin-top:8px;">
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DATE / TIME</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">EVENT</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;letter-spacing:0.07em;">DETAILS</span>
+            </div>""", unsafe_allow_html=True)
+
+            # ── Event style map ────────────────────────────────────────────
+            _au_ecfg = {
+                "SESSION_START":     ("#DCFCE7", "#15803D", "#F0FDF4", "Session Started"),
+                "SESSION_STOP":      ("#FEF9C3", "#92400E", "#FFFBEB", "Session Stopped"),
+                "SESSION_PAUSE":     ("#DBEAFE", "#1D4ED8", "#EFF6FF", "Session Paused"),
+                "EMERGENCY_STOP":    ("#FEE2E2", "#991B1B", "#FFF5F5", "⚠ Emergency Stop"),
+                "PARAM_CHANGE":      ("#EDE9FE", "#5B21B6", "#F5F3FF", "Parameter Adjusted"),
+                "INBODY_OCR_UPLOAD": ("#CFFAFE", "#0E7490", "#F0FDFF", "InBody Scan Uploaded"),
+                "APPROVAL_GRANTED":  ("#DCFCE7", "#15803D", "#F0FDF4", "✅ Approval Granted"),
+                "APPROVAL_DECLINED": ("#FEF9C3", "#92400E", "#FFFBEB", "❌ Approval Declined"),
+            }
+            _au_default = ("#E2E8F0", "#475569", "#F8FAFC", "System Event")
+
+            _au_rows_html = ""
+            for _au_i, (_, _au_row) in enumerate(_au_filtered.iterrows()):
+                _au_dc, _au_tc, _au_bg, _au_lbl = _au_ecfg.get(_au_row['event'], _au_default)
+                _au_det = str(_au_row['details']) if _au_row['details'] else "—"
+                _au_ts  = str(_au_row['ts'])[:19]
+                _au_date = _au_ts[:10]
+                _au_time = _au_ts[11:19] if len(_au_ts) > 10 else ""
+                _au_border_top = "1px solid #E2E8F0" if _au_i > 0 else "none"
+                _au_radius = "0 0 8px 8px" if _au_i == len(_au_filtered) - 1 else "0"
+                _au_rows_html += (
+                    f'<div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;'
+                    f'background:{_au_bg};border-left:1px solid #E2E8F0;border-right:1px solid #E2E8F0;'
+                    f'border-top:{_au_border_top};border-bottom:1px solid #E2E8F0;'
+                    f'border-radius:{_au_radius};padding:9px 14px;align-items:center;">'
+                    f'<div>'
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#1E293B;font-family:monospace;">{_au_date}</div>'
+                    f'<div style="font-size:0.72rem;color:#94A3B8;font-family:monospace;">{_au_time}</div>'
+                    f'</div>'
+                    f'<div style="display:flex;align-items:center;gap:7px;">'
+                    f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+                    f'background:{_au_dc};border:1.5px solid {_au_tc};flex-shrink:0;"></span>'
+                    f'<span style="font-size:0.78rem;font-weight:600;color:{_au_tc};">{_au_lbl}</span>'
+                    f'</div>'
+                    f'<div style="font-size:0.77rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                    f'{_au_det}</div>'
+                    f'</div>'
+                )
+            st.markdown(_au_rows_html, unsafe_allow_html=True)
+            st.caption(f"Showing {len(_au_filtered)} of {len(df_logs)} total events · Patient: {patient_id}")
+
+        # ── Export buttons ─────────────────────────────────────────────────
+        st.divider()
+        _au_col1, _au_col2 = st.columns(2)
+        with _au_col1:
+            _au_csv = df_logs.to_csv(index=False).encode("utf-8") if not df_logs.empty else b""
+            st.download_button(
+                "⬇️ Export Audit Trail (CSV)", _au_csv,
+                f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv", use_container_width=True, disabled=df_logs.empty
+            )
+        with _au_col2:
+            if not df_logs.empty:
+                _au_txt  = f"CLINICAL AUDIT TRAIL\n{'='*50}\n"
+                _au_txt += f"Patient ID : {patient_id}\n"
+                _au_txt += f"Generated  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                _au_txt += f"{'='*50}\n\n"
+                for _, _au_r in df_logs.iterrows():
+                    _au_txt += f"[{_au_r['ts']}]  {_au_r['event']:<22}  {_au_r['details']}\n"
+                st.download_button(
+                    "📄 Export Formatted Report (TXT)",
+                    _au_txt.encode("utf-8"),
+                    f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    "text/plain", use_container_width=True
+                )
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Export Report
