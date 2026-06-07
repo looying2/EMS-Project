@@ -1589,13 +1589,15 @@ if user_role == "Doctor":
                 # Summary paragraph
                 st.markdown(summary.get('summary', ''))
                 # Signal Interpretation
-                st.markdown("### Signal Interpretation")
-                for point in summary.get('interpretation', []):
-                    st.markdown(f"- {point}")
-                # Recommended Actions
-                st.markdown("### Recommended Actions")
-                for action in summary.get('actions', []):
-                    st.markdown(f"- {action}")
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.markdown("### 📊 Signal Interpretation")
+                    for point in summary.get('interpretation', []):
+                        st.markdown(f"- {point}")
+                with col_right:
+                    st.markdown("### ⚙️ Recommended Actions")
+                    for action in summary.get('actions', []):
+                        st.markdown(f"- {action}")
             else:
                 st.markdown(summary)  # fallback
 
