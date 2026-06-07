@@ -2051,13 +2051,13 @@ if user_role == "Doctor":
             _au_all_evts = ["All Events"] + sorted(df_logs['event'].unique().tolist())
             with _au_fc1:
                 _au_evt_filter = st.selectbox("Event Type", _au_all_evts,
-                                              key="audit_evt_filter", label_visibility="collapsed")
+                                              key="audit_evt_filter_records", label_visibility="collapsed")
             with _au_fc2:
                 _au_search = st.text_input("Search", placeholder="🔍  Search by event or details…",
-                                           key="audit_search", label_visibility="collapsed")
+                                           key="audit_search_records", label_visibility="collapsed")
             with _au_fc3:
                 _au_show_n = st.selectbox("Show", [20, 50, 100, 200],
-                                          key="audit_show_n", label_visibility="collapsed")
+                                          key="audit_show_n_records", label_visibility="collapsed")
 
             _au_filtered = df_logs.copy()
             if _au_evt_filter != "All Events":
@@ -2228,10 +2228,10 @@ if user_role == "Doctor":
                                               key="audit_evt_filter", label_visibility="collapsed")
             with _au_fc2:
                 _au_search = st.text_input("Search", placeholder="🔍  Search by event or details…",
-                                           key="audit_search", label_visibility="collapsed")
+                                           key="audit_search_records", label_visibility="collapsed")
             with _au_fc3:
                 _au_show_n = st.selectbox("Show", [20, 50, 100, 200],
-                                          key="audit_show_n", label_visibility="collapsed")
+                                          key="audit_show_n_records", label_visibility="collapsed")
 
             _au_filtered = df_logs.copy()
             if _au_evt_filter != "All Events":
