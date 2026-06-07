@@ -342,6 +342,9 @@ ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
+ss_init("logged_in", False)
+ss_init("user_email", "")
+ss_init("user_role", "")   # optional, for RBAC
 
 # Process-level shared state for background ML thread ↔ main loop communication.
 # st.cache_resource survives all reruns and is guaranteed to return the same object.
@@ -360,6 +363,82 @@ def load_easyocr():
 
 reader = load_easyocr()
 
+def ss_init(key, value):
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+ss_init("logged_in", False)  # New flag
+ss_init("username", "")       # Store the user's email
+ss_init("user_role", "")      # To store role for access control (e.g., "Doctor", "Caregiver")
+
+def login_page():
+    # Custom CSS to center the login form
+    st.markdown("""
+    <style>
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 80vh;
+        }
+        .login-card {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+        }
+        .login-title {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #264653;
+            margin-bottom: 1rem;
+        }
+        .login-subtitle {
+            color: #6c757d;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Center the login card using columns
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.markdown('<div class="login-title">🩺 AI-EMS Clinical Dashboard</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-subtitle">Please sign in to continue</div>', unsafe_allow_html=True)
+        
+        email = st.text_input("Email", placeholder="doctor@hospital.com", key="login_email")
+        password = st.text_input("Password", type="password", placeholder="••••••••", key="login_password")
+        
+        col_btn1, col_btn2 = st.columns([1, 1])
+        with col_btn1:
+            login_clicked = st.button("Login", type="primary", use_container_width=True)
+        with col_btn2:
+            # Optional: link to registration page (if you implement it)
+            st.markdown("[Create account](#)", unsafe_allow_html=True)
+        
+        if login_clicked:
+            if email and password:
+                try:
+                    # Use existing Firebase auth instance
+                    user = firebase.auth().sign_in_with_email_and_password(email, password)
+                    st.session_state.logged_in = True
+                    st.session_state.user_email = email
+                    # Optionally fetch custom claims for role
+                    # id_token = user['idToken']
+                    # decoded = auth.verify_id_token(id_token)  # requires firebase_admin
+                    # st.session_state.user_role = decoded.get('role', 'Caregiver')
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {str(e)}")
+            else:
+                st.warning("Please enter both email and password.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
 def generate_session_summary():
     tele = st.session_state.telemetry
     if tele.empty:
@@ -932,6 +1011,14 @@ with st.sidebar:
     st.title("AI-Enhanced EMS System")
     st.caption(f"ML Engine: Remote API")
     st.divider()
+
+    st.markdown(f"**👤 {st.session_state.user_email}**")
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.user_email = ""
+        st.rerun()
+    st.divider()
+    
     st.subheader("Patient Profile")
     patient_id = st.text_input("Patient ID", value="PT-2024-89")
     age_group = st.selectbox("Age Group", ["60-69", "70-79", "80+"])
@@ -1053,6 +1140,10 @@ with col_stop:
 # ==========================================
 # 9. MAIN LOGIC LOOP (Telemetry & ML update)
 # ==========================================
+if not st.session_state.logged_in:
+    login_page()
+    st.stop()   # No further code runs – the dashboard is hidden
+    
 if st.session_state.connected:
     # 1. Update telemetry from Firebase
     update_telemetry_stream()
