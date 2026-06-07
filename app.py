@@ -1583,9 +1583,103 @@ if user_role == "Doctor":
         with col_p2:
             st.markdown("**Fatigue Level Trend**")
             st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6", height=250)
-        st.markdown("**Muscle Activation (EMG) - Session Overview**")
-        emg_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'EMG Amplitude': [15, 18, 20, 22, 24]})
-        st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
+        st.markdown("**Muscle Activation (EMG) — Last 20-Min Session**")
+
+        # Fetch last 20 minutes of EMG data from Firebase
+        _SESSION_SECS = SESSION_DURATION_MINUTES * 60   # 1200 s
+        try:
+            _emg_raw = fb_read("emg_data")
+            if _emg_raw and isinstance(_emg_raw, dict):
+                # Build dataframe from all entries
+                _rows = []
+                for _k, _v in _emg_raw.items():
+                    if not isinstance(_v, dict):
+                        continue
+                    _ts = _v.get("timestamp") or _v.get("ts")
+                    _val = _v.get("avg") or _v.get("emg") or _v.get("rms")
+                    _state = _v.get("state", "UNKNOWN")
+                    if _ts and _val is not None:
+                        _rows.append({"ts": int(_ts), "emg": float(_val), "state": _state})
+
+                if _rows:
+                    _df_emg = pd.DataFrame(_rows).sort_values("ts").reset_index(drop=True)
+                    # Take only last 20 min window
+                    _t_max = _df_emg["ts"].max()
+                    _t_min = _t_max - _SESSION_SECS
+                    _df_emg = _df_emg[_df_emg["ts"] >= _t_min].copy()
+                    # Convert timestamp to elapsed minutes
+                    _df_emg["min"] = ((_df_emg["ts"] - _df_emg["ts"].min()) / 60).round(2)
+                    _df_emg["time_label"] = _df_emg["min"].apply(lambda x: f"{x:.1f} min")
+
+                    # Colour each point by muscle state
+                    _state_colors = {
+                        "ACTIVE":  "#2A9D8F",
+                        "MEDIUM":  "#F4A261",
+                        "RELAX":   "#81B29A",
+                        "UNKNOWN": "#94A3B8"
+                    }
+
+                    _fig_emg = go.Figure()
+                    for _st, _sc in _state_colors.items():
+                        _mask = _df_emg["state"] == _st
+                        if _mask.any():
+                            _sub = _df_emg[_mask]
+                            _fig_emg.add_trace(go.Scatter(
+                                x=_sub["min"], y=_sub["emg"],
+                                mode="lines+markers",
+                                name=_st.title(),
+                                line=dict(color=_sc, width=1.5),
+                                marker=dict(size=4, color=_sc),
+                                fill="tozeroy",
+                                fillcolor=_sc.replace(")", ",0.08)").replace("rgb", "rgba") if "rgb" in _sc else _sc + "14",
+                                hovertemplate="<b>%{y:.0f} µV</b><br>%{x:.1f} min<br>State: " + _st + "<extra></extra>"
+                            ))
+
+                    # Threshold lines
+                    _fig_emg.add_hline(y=700, line_dash="dot", line_color="#EF5350",
+                                       annotation_text="Overexertion (700)", annotation_position="top right",
+                                       annotation_font_size=10)
+                    _fig_emg.add_hline(y=500, line_dash="dot", line_color="#F4A261",
+                                       annotation_text="Fatigue (500)", annotation_position="top right",
+                                       annotation_font_size=10)
+                    _fig_emg.add_hline(y=300, line_dash="dot", line_color="#81B29A",
+                                       annotation_text="Moderate (300)", annotation_position="top right",
+                                       annotation_font_size=10)
+
+                    _fig_emg.update_layout(
+                        height=300,
+                        margin=dict(l=10, r=10, t=10, b=30),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(title="Session Time (min)", gridcolor="#E2E8F0",
+                                   ticksuffix=" min", range=[0, SESSION_DURATION_MINUTES]),
+                        yaxis=dict(title="EMG (µV)", gridcolor="#E2E8F0", range=[0, 1000]),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                    xanchor="right", x=1, font=dict(size=10)),
+                        hovermode="x unified"
+                    )
+                    st.plotly_chart(_fig_emg, use_container_width=True)
+
+                    # Summary stats row
+                    _s1, _s2, _s3, _s4 = st.columns(4)
+                    _s1.metric("📊 Samples", len(_df_emg))
+                    _s2.metric("📈 Avg EMG", f"{_df_emg['emg'].mean():.0f} µV")
+                    _s3.metric("⬆ Peak", f"{_df_emg['emg'].max():.0f} µV")
+                    _state_counts = _df_emg["state"].value_counts()
+                    _dominant = _state_counts.index[0] if not _state_counts.empty else "—"
+                    _s4.metric("🏃 Dominant State", _dominant.title())
+                else:
+                    st.info("No EMG data found in Firebase.")
+            else:
+                st.info("Could not load EMG data from Firebase.")
+        except Exception as _e:
+            st.warning(f"Firebase EMG fetch failed: {_e}")
+            # Fallback to static demo chart
+            emg_progress = pd.DataFrame({
+                'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'],
+                'EMG Amplitude': [15, 18, 20, 22, 24]
+            })
+            st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Session Audit Trail
