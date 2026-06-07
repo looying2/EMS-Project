@@ -1576,54 +1576,54 @@ if user_role == "Doctor":
             st.warning("Intensity adjustments are locked for Caregiver role.")
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # ---------- TAB 4: RECORDS & REPORTS ----------
-    with tab_records:
-         if st.session_state.session_summary_text:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("📝 AI Session Summary")
+   # ---------- TAB 4: RECORDS & REPORTS ----------
+with tab_records:
+    if st.session_state.session_summary_text:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("📝 AI Session Summary")
 
-            _sess = st.session_state.session_summary_text
+        _sess = st.session_state.session_summary_text
 
-            # ── Stat row ───────────────────────────────────────────────────
-            _tele_snap = st.session_state.telemetry
-            _gait_res  = st.session_state.ml_prediction
-            _stat_cols = st.columns(5)
-            _stat_cols[0].metric("⏱️ Duration",   f"{SESSION_DURATION_MINUTES} min")
-            _stat_cols[1].metric("📈 Avg EMG",    f"{_tele_snap['emg'].mean():.1f} µV" if not _tele_snap.empty else "—")
-            _stat_cols[2].metric("🦶 Gait Result", _gait_res)
-            _stat_cols[3].metric("😣 Pain",        f"{st.session_state.live_pain}/10")
-            _stat_cols[4].metric("😴 Fatigue",     f"{st.session_state.live_fatigue}/10")
-            st.divider()
+        # Stat row
+        _tele_snap = st.session_state.telemetry
+        _gait_res  = st.session_state.ml_prediction
+        _stat_cols = st.columns(5)
+        _stat_cols[0].metric("⏱️ Duration",   f"{SESSION_DURATION_MINUTES} min")
+        _stat_cols[1].metric("📈 Avg EMG",    f"{_tele_snap['emg'].mean():.1f} µV" if not _tele_snap.empty else "—")
+        _stat_cols[2].metric("🦶 Gait Result", _gait_res)
+        _stat_cols[3].metric("😣 Pain",        f"{st.session_state.live_pain}/10")
+        _stat_cols[4].metric("😴 Fatigue",     f"{st.session_state.live_fatigue}/10")
+        st.divider()
 
-            # ── Clinical summary body ──────────────────────────────────────
-            st.markdown("#### 🏥 Clinical Session Summary")
-            if isinstance(_sess, dict) and "error" not in _sess:
-                if _sess.get("title"):
-                    st.markdown(f"**{_sess['title']}**")
-                if _sess.get("summary"):
-                    st.markdown(
-                        f"<p style='font-size:0.88rem;color:#475569;line-height:1.75;margin:10px 0 14px;'>"
-                        f"{_sess['summary']}</p>", unsafe_allow_html=True)
-                _ci, _ca = st.columns(2)
-                with _ci:
-                    if _sess.get("interpretation"):
-                        st.markdown("**📊 Signal Interpretation**")
-                        for _item in _sess["interpretation"]:
-                            st.markdown(f"- {_item}")
-                with _ca:
-                    if _sess.get("actions"):
-                        st.markdown("**⚙️ Parameter Recommendations**")
-                        for _item in _sess["actions"]:
-                            st.markdown(f"- {_item}")
-            elif isinstance(_sess, dict) and "error" in _sess:
-                st.warning(_sess["error"])
-            else:
-                st.markdown(_sess)
+        # Clinical summary body
+        st.markdown("#### 🏥 Clinical Session Summary")
+        if isinstance(_sess, dict) and "error" not in _sess:
+            if _sess.get("title"):
+                st.markdown(f"**{_sess['title']}**")
+            if _sess.get("summary"):
+                st.markdown(
+                    f"<p style='font-size:0.88rem;color:#475569;line-height:1.75;margin:10px 0 14px;'>"
+                    f"{_sess['summary']}</p>", unsafe_allow_html=True)
+            _ci, _ca = st.columns(2)
+            with _ci:
+                if _sess.get("interpretation"):
+                    st.markdown("**📊 Signal Interpretation**")
+                    for _item in _sess["interpretation"]:
+                        st.markdown(f"- {_item}")
+            with _ca:
+                if _sess.get("actions"):
+                    st.markdown("**⚙️ Parameter Recommendations**")
+                    for _item in _sess["actions"]:
+                        st.markdown(f"- {_item}")
+        elif isinstance(_sess, dict) and "error" in _sess:
+            st.warning(_sess["error"])
+        else:
+            st.markdown(_sess)
 
-            st.divider()
-            if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
-                st.session_state.session_summary_generated = False
-                st.rerun()
+        st.divider()
+        if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
+            st.session_state.session_summary_generated = False
+            st.rerun()
 
 
             st.divider()
