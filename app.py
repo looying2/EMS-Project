@@ -1585,17 +1585,17 @@ if user_role == "Doctor":
             summary = st.session_state.session_summary_text
             if isinstance(summary, dict):
                 # Title
-                st.markdown(f"## {summary.get('title', 'Clinical Session Summary')}")
+                st.markdown(f"### {summary.get('title', 'Clinical Session Summary')}")
                 # Summary paragraph
                 st.markdown(summary.get('summary', ''))
                 # Signal Interpretation
                 col_left, col_right = st.columns(2)
                 with col_left:
-                    st.markdown("### 📊 Signal Interpretation")
+                    st.markdown("#### 📊 Signal Interpretation")
                     for point in summary.get('interpretation', []):
                         st.markdown(f"- {point}")
                 with col_right:
-                    st.markdown("### ⚙️ Recommended Actions")
+                    st.markdown("#### ⚙️ Recommended Actions")
                     for action in summary.get('actions', []):
                         st.markdown(f"- {action}")
             else:
