@@ -2303,213 +2303,193 @@ if user_role == "Doctor":
 
 else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
     # ==========================================
-    # SIMPLIFIED, ELDERLY-FRIENDLY DASHBOARD
+    # REDESIGNED CAREGIVER VIEW
     # ==========================================
-    st.markdown("""
-    <style>
-        h1, h2, h3 {
-            font-size: 2rem !important;
-        }
-        .care-card {
-            background: white;
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 18px;
-            text-align: center;
-            border: 1px solid #E2E8F0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-        .care-title {
-            font-size: 1.3rem;
-            color: #475569;
-            font-weight: 700;
-        }
-        .care-value {
-            font-size: 2.8rem;
-            font-weight: 900;
-            color: #0F172A;
-            margin-top: 6px;
-        }
-        .care-desc {
-            font-size: 1rem;
-            color: #475569;
-            margin-top: 6px;
-        }
-        div.stButton > button {
-            font-size: 1.3rem !important;
-            height: 60px !important;
-            border-radius: 16px !important;
-            font-weight: 700 !important;
-        }
-        div[data-testid="stSlider"] label {
-            font-size: 1.3rem !important;
-            font-weight: 700 !important;
-        }
-        .stAlert {
-            font-size: 1.2rem !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
- 
-    st.markdown("## 👨‍👩‍👧 Caregiver View")
-    st.caption("Simple monitoring screen for patient comfort and safety.")
- 
+
+    # ---------- Helper for status colours ----------
+    def get_emg_status(emg):
+        if emg > 700:
+            return "overexertion", "#DC2626"  # red
+        elif emg > 500:
+            return "fatigue", "#F59E0B"       # amber
+        elif emg > 300:
+            return "moderate", "#10B981"      # green
+        else:
+            return "relaxed", "#3B82F6"       # blue
+
+    # ---------- Data ----------
     tele = st.session_state.telemetry
     latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
     pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
- 
-    # status emoji
-    if pred_label == "Relaxed":
-        status_emoji = "😌"
-    elif pred_label == "Moderate Activity":
-        status_emoji = "💪"
-    elif pred_label == "Muscle Fatigue":
-        status_emoji = "😩"
+
+    # ---------- Header row: Patient ID, Protocol, Session Status ----------
+    st.markdown("---")
+    col_h1, col_h2, col_h3 = st.columns([2, 1.5, 1.5])
+    with col_h1:
+        st.markdown(f"**Patient ID**  \n{patient_id}")
+    with col_h2:
+        st.markdown(f"**Protocol**  \n{protocol}")
+    with col_h3:
+        # Session status tile with colour and live timer
+        status = st.session_state.system_status
+        status_color = {"ACTIVE": "#2A9D8F", "PAUSED": "#F4A261", "STOPPED": "#EF5350", "IDLE": "#94A3B8"}.get(status, "#94A3B8")
+        st.markdown(f"""
+        <div style="background:{status_color}; color:white; border-radius:12px; padding:8px 12px; text-align:center;">
+            <div style="font-size:0.7rem; font-weight:600;">SESSION STATUS</div>
+            <div style="font-size:1.2rem; font-weight:800;">{status}</div>
+            <div style="font-size:0.8rem;">{'Remaining: ' + st.session_state.get('session_timer_str', '--:--') if status == 'ACTIVE' else ''}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ---------- Smart Alert Banner ----------
+    pain_val = st.session_state.get("live_pain", 0)
+    fatigue_val = st.session_state.get("live_fatigue", 0)
+    emg_status, _ = get_emg_status(latest_emg)
+
+    if pain_val > 7 or emg_status == "overexertion":
+        alert_color = "#DC2626"
+        alert_msg = "⚠️ HIGH RISK – Patient in pain or overexertion. Consider stopping therapy."
+    elif pain_val > 4 or fatigue_val > 7 or emg_status == "fatigue":
+        alert_color = "#F59E0B"
+        alert_msg = "⚠️ Moderate concern – Monitor pain, fatigue, or muscle activity."
     else:
-        status_emoji = "⚠️"
- 
-    # card background based on muscle state
-    if pred_label in ["Muscle Fatigue", "Overexertion"]:
-        status_color = "#FEE2E2"
-        border_color = "#EF4444"
-    elif pred_label == "Moderate Activity":
-        status_color = "#FEF3C7"
-        border_color = "#F59E0B"
-    else:
-        status_color = "#DCFCE7"
-        border_color = "#22C55E"
- 
+        alert_color = "#10B981"
+        alert_msg = "✅ All clear – Session progressing normally."
+
     st.markdown(f"""
-    <div class="care-card" style="background:{status_color}; border-color:{border_color};">
-        <div style="font-size:3.5rem;">{status_emoji}</div>
-        <div class="care-title">Current Muscle Condition</div>
-        <div class="care-value">{pred_label}</div>
-        <div class="care-desc">{pred_desc}</div>
+    <div style="background:{alert_color}; color:white; border-radius:12px; padding:12px; text-align:center; margin-bottom:20px;">
+        <strong>{alert_msg}</strong>
     </div>
     """, unsafe_allow_html=True)
- 
-    # Two big cards: EMG and Gait
-    c1, c2 = st.columns(2)
-    with c1:
+
+    # ---------- 4‑card live readings row ----------
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Card 1: EMG Value
+    emg_status_label, emg_border = get_emg_status(latest_emg)
+    col1.markdown(f"""
+    <div style="border-left:5px solid {emg_border}; background:#FFFFFF; border-radius:12px; padding:12px; text-align:center;">
+        <div style="font-size:0.7rem; color:#64748B;">EMG SIGNAL</div>
+        <div style="font-size:1.8rem; font-weight:700;">{latest_emg:.0f}</div>
+        <div style="font-size:0.7rem;">µV</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Card 2: Muscle State
+    state_bg = {"Overexertion":"#FEE2E2","Muscle Fatigue":"#FEF3C7","Moderate Activity":"#DCFCE7","Relaxed":"#EFF6FF"}.get(pred_label, "#F8FAFC")
+    state_col = {"Overexertion":"#DC2626","Muscle Fatigue":"#F59E0B","Moderate Activity":"#10B981","Relaxed":"#3B82F6"}.get(pred_label, "#64748B")
+    col2.markdown(f"""
+    <div style="background:{state_bg}; border-radius:12px; padding:12px; text-align:center;">
+        <div style="font-size:0.7rem; color:#64748B;">MUSCLE STATE</div>
+        <div style="font-size:1.2rem; font-weight:700; color:{state_col};">{pred_label}</div>
+        <div style="font-size:0.7rem;">{pred_desc}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Card 3: Gait Pattern
+    gait = st.session_state.ml_prediction
+    gait_color = "#10B981" if gait == "NORMAL" else "#DC2626" if gait == "ABNORMAL" else "#94A3B8"
+    gait_text = "Normal" if gait == "NORMAL" else "Check Needed" if gait == "ABNORMAL" else "Waiting"
+    col3.markdown(f"""
+    <div style="border-left:5px solid {gait_color}; background:#FFFFFF; border-radius:12px; padding:12px; text-align:center;">
+        <div style="font-size:0.7rem; color:#64748B;">GAIT PATTERN</div>
+        <div style="font-size:1.2rem; font-weight:700; color:{gait_color};">{gait_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Card 4: Session Timer
+    total_seconds = st.session_state.elapsed_time
+    if st.session_state.system_status == "ACTIVE" and st.session_state.session_start_time:
+        total_seconds += (time.time() - st.session_state.session_start_time)
+    remaining = max(0, SESSION_DURATION_MINUTES * 60 - total_seconds)
+    rem_min = int(remaining // 60)
+    rem_sec = int(remaining % 60)
+    st.session_state["session_timer_str"] = f"{rem_min:02d}:{rem_sec:02d}"
+    col4.markdown(f"""
+    <div style="background:#FFFFFF; border-radius:12px; padding:12px; text-align:center;">
+        <div style="font-size:0.7rem; color:#64748B;">TIME REMAINING</div>
+        <div style="font-size:1.4rem; font-weight:700;">{rem_min:02d}:{rem_sec:02d}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ---------- Patient Feedback (side‑by‑side sliders with colour bars) ----------
+    st.markdown("### Patient Feedback")
+    col_f1, col_f2 = st.columns(2)
+
+    with col_f1:
+        pain = st.slider("😖 Pain Level", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
+        st.session_state.live_pain = pain
+        # Colour bar
+        pct = pain / 10
+        bar_color = "#DC2626" if pain > 7 else "#F59E0B" if pain > 4 else "#10B981"
         st.markdown(f"""
-        <div class="care-card">
-            <div class="care-title">📈 EMG Signal</div>
-            <div class="care-value" style="color:#2A9D8F;">{latest_emg:.0f}</div>
-            <div class="care-desc">microvolts (µV)</div>
+        <div style="background:#E2E8F0; border-radius:20px; height:8px; width:100%;">
+            <div style="background:{bar_color}; width:{pct*100}%; height:8px; border-radius:20px;"></div>
+        </div>
+        <div style="font-size:0.7rem; margin-top:2px;">
+            {'🔴 Severe' if pain > 7 else '🟡 Moderate' if pain > 4 else '🟢 Mild/None'}
         </div>
         """, unsafe_allow_html=True)
-    with c2:
-        gait_status = st.session_state.ml_prediction
-        if gait_status == "NORMAL":
-            gait_text = "Normal"
-            gait_icon = "✅"
-            gait_bg = "#DCFCE7"
-            gait_border = "#22C55E"
-        else:
-            gait_text = "Check Needed"
-            gait_icon = "⚠️"
-            gait_bg = "#FEE2E2"
-            gait_border = "#EF4444"
+
+    with col_f2:
+        fatigue = st.slider("😴 Fatigue Level", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
+        st.session_state.live_fatigue = fatigue
+        pct = fatigue / 10
+        bar_color = "#DC2626" if fatigue > 7 else "#F59E0B" if fatigue > 4 else "#10B981"
         st.markdown(f"""
-        <div class="care-card" style="background:{gait_bg}; border-color:{gait_border};">
-            <div style="font-size:2.5rem;">{gait_icon}</div>
-            <div class="care-title">Gait Pattern</div>
-            <div class="care-value">{gait_text}</div>
+        <div style="background:#E2E8F0; border-radius:20px; height:8px; width:100%;">
+            <div style="background:{bar_color}; width:{pct*100}%; height:8px; border-radius:20px;"></div>
+        </div>
+        <div style="font-size:0.7rem; margin-top:2px;">
+            {'🔴 Extreme' if fatigue > 7 else '🟡 Noticeable' if fatigue > 4 else '🟢 Low'}
         </div>
         """, unsafe_allow_html=True)
- 
-    st.markdown("## Patient Feeling")
-    pain = st.slider("😖 Pain Level", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
-    fatigue = st.slider("😴 Fatigue Level", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
-    st.session_state.live_pain = pain
-    st.session_state.live_fatigue = fatigue
- 
-    if pain > 7:
-        st.error("🔴 High pain. Stop therapy and tell the clinician.")
-    elif fatigue > 7:
-        st.warning("🟡 Patient is very tired. Please take a rest.")
-    elif pred_label in ["Muscle Fatigue", "Overexertion"]:
-        st.warning("🟡 Muscle activity is high. Monitor the patient closely.")
-    else:
-        st.success("🟢 Patient condition looks okay.")
- 
-    # ===== EXPANDER: LEAN MUSCLE ANALYSIS (collapsible, less intrusive) =====
-    with st.expander("💪 Show Muscle Health by Body Part (detailed)"):
-        st.markdown("""
-        <style>
-            .muscle-card {
-                background: white;
-                border-radius: 16px;
-                padding: 16px;
-                margin-bottom: 14px;
-                border: 1px solid #E2E8F0;
-            }
-            .muscle-title {
-                font-size: 1.2rem;
-                font-weight: 700;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-            .progress-bar-bg {
-                background-color: #E2E8F0;
-                border-radius: 30px;
-                height: 32px;
-                width: 100%;
-                margin: 10px 0;
-            }
-            .progress-fill {
-                height: 32px;
-                border-radius: 30px;
-                display: flex;
-                align-items: center;
-                justify-content: flex-end;
-                padding-right: 12px;
-                color: white;
-                font-weight: 700;
-                font-size: 1rem;
-            }
-            .muscle-stats {
-                font-size: 0.95rem;
-                color: #475569;
-            }
-        </style>
-        """, unsafe_allow_html=True)
- 
-        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
-        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
-        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
- 
-        for seg, pct, mass, icon in zip(segments, percentages, masses, icons):
-            bar_color = "#22C55E" if pct >= 90 else "#EF4444"
-            status_text = "Normal ✅" if pct >= 90 else "Weak ⚠️"
+
+    st.markdown("---")
+
+    # ---------- Muscle Health Grid (2 columns, compact cards) ----------
+    st.markdown("### Muscle Health by Body Part")
+    segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+    percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
+    masses = [1.13, 13.3, 1.21, 5.11, 5.13]
+    icons = ["💪", "🎯", "💪", "🦵", "🦵"]
+
+    # Arrange in two columns (first column: 0,2,4 ; second: 1,3)
+    col_left, col_right = st.columns(2)
+    for i, (seg, pct, mass, icon) in enumerate(zip(segments, percentages, masses, icons)):
+        target_col = col_left if i % 2 == 0 else col_right
+        with target_col:
+            border_color = "#EF4444" if pct < 90 else "#22C55E"
+            bar_color = "#EF4444" if pct < 90 else "#22C55E"
+            status_text = "Weak" if pct < 90 else "Normal"
             st.markdown(f"""
-            <div class="muscle-card">
-                <div class="muscle-title">
-                    <span style="font-size:1.8rem;">{icon}</span>
-                    <span>{seg}</span>
-                    <span style="margin-left: auto; color: {bar_color};">{status_text}</span>
+            <div style="border-left:4px solid {border_color}; background:#FFFFFF; border-radius:12px; padding:8px 12px; margin-bottom:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:600;">{icon} {seg}</span>
+                    <span style="font-size:0.8rem; color:{border_color}; font-weight:600;">{status_text}</span>
                 </div>
-                <div class="progress-bar-bg">
-                    <div class="progress-fill" style="background-color: {bar_color}; width: {pct}%;">
-                        {pct:.1f}%
-                    </div>
-                </div>
-                <div class="muscle-stats">
-                    Mass: <strong>{mass} kg</strong> &nbsp; (vs ideal)
+                <div style="font-size:1.1rem; font-weight:700;">{mass} kg</div>
+                <div style="background:#E2E8F0; border-radius:20px; height:6px; margin:6px 0;">
+                    <div style="background:{bar_color}; width:{pct}%; height:6px; border-radius:20px;"></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        st.caption("✅ Normal = muscle mass ≥90% of ideal. ⚠️ Weak = below 90%.")
- 
-    st.info("Use START, PAUSE, or STOP buttons above. Press Emergency STOP if the patient feels unsafe.")
- 
-    with st.expander("📈 Show EMG trend"):
+
+    st.caption("✅ Normal = muscle mass ≥90% of ideal. ⚠️ Weak = below 90%.")
+
+    st.markdown("---")
+
+    # ---------- EMG Trend (collapsible) ----------
+    with st.expander("📈 Show EMG trend (last few minutes)"):
         if not tele.empty:
             st.line_chart(tele.set_index("t")["emg"], height=260)
         else:
             st.write("No data yet.")
+
+    st.info("Use START, PAUSE, or STOP buttons above. Press Emergency STOP if the patient feels unsafe.")
 
 # ==========================================
 # 11. AUTO REFRESH
