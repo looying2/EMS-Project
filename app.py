@@ -2350,14 +2350,14 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
         }
     </style>
     """, unsafe_allow_html=True)
-
+ 
     st.markdown("## 👨‍👩‍👧 Caregiver View")
     st.caption("Simple monitoring screen for patient comfort and safety.")
-
+ 
     tele = st.session_state.telemetry
     latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
     pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
-
+ 
     # status emoji
     if pred_label == "Relaxed":
         status_emoji = "😌"
@@ -2367,7 +2367,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
         status_emoji = "😩"
     else:
         status_emoji = "⚠️"
-
+ 
     # card background based on muscle state
     if pred_label in ["Muscle Fatigue", "Overexertion"]:
         status_color = "#FEE2E2"
@@ -2378,7 +2378,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
     else:
         status_color = "#DCFCE7"
         border_color = "#22C55E"
-
+ 
     st.markdown(f"""
     <div class="care-card" style="background:{status_color}; border-color:{border_color};">
         <div style="font-size:3.5rem;">{status_emoji}</div>
@@ -2387,7 +2387,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
         <div class="care-desc">{pred_desc}</div>
     </div>
     """, unsafe_allow_html=True)
-
+ 
     # Two big cards: EMG and Gait
     c1, c2 = st.columns(2)
     with c1:
@@ -2417,13 +2417,13 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
             <div class="care-value">{gait_text}</div>
         </div>
         """, unsafe_allow_html=True)
-
+ 
     st.markdown("## Patient Feeling")
     pain = st.slider("😖 Pain Level", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
     fatigue = st.slider("😴 Fatigue Level", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
     st.session_state.live_pain = pain
     st.session_state.live_fatigue = fatigue
-
+ 
     if pain > 7:
         st.error("🔴 High pain. Stop therapy and tell the clinician.")
     elif fatigue > 7:
@@ -2432,7 +2432,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
         st.warning("🟡 Muscle activity is high. Monitor the patient closely.")
     else:
         st.success("🟢 Patient condition looks okay.")
-
+ 
     # ===== EXPANDER: LEAN MUSCLE ANALYSIS (collapsible, less intrusive) =====
     with st.expander("💪 Show Muscle Health by Body Part (detailed)"):
         st.markdown("""
@@ -2475,12 +2475,12 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
             }
         </style>
         """, unsafe_allow_html=True)
-
+ 
         segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
         percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
         masses = [1.13, 13.3, 1.21, 5.11, 5.13]
         icons = ["💪", "🎯", "💪", "🦵", "🦵"]
-
+ 
         for seg, pct, mass, icon in zip(segments, percentages, masses, icons):
             bar_color = "#22C55E" if pct >= 90 else "#EF4444"
             status_text = "Normal ✅" if pct >= 90 else "Weak ⚠️"
@@ -2502,9 +2502,9 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard
             </div>
             """, unsafe_allow_html=True)
         st.caption("✅ Normal = muscle mass ≥90% of ideal. ⚠️ Weak = below 90%.")
-
+ 
     st.info("Use START, PAUSE, or STOP buttons above. Press Emergency STOP if the patient feels unsafe.")
-
+ 
     with st.expander("📈 Show EMG trend"):
         if not tele.empty:
             st.line_chart(tele.set_index("t")["emg"], height=260)
