@@ -1576,168 +1576,414 @@ if user_role == "Doctor":
             st.warning("Intensity adjustments are locked for Caregiver role.")
         st.markdown('</div>', unsafe_allow_html=True)
         
-    # ---------- TAB 4: RECORDS & REPORTS ----------
+        # ---------- TAB 4: RECORDS & REPORTS ----------
     with tab_records:
+        # =====================================================
+        # 1. AI SESSION SUMMARY + CLINICIAN APPROVAL
+        # =====================================================
         if st.session_state.session_summary_text:
             st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
             st.subheader("📝 AI Session Summary")
-
-            _sess = st.session_state.session_summary_text
-
-            # ── Stat row ───────────────────────────────────────────────────
-            _tele_snap = st.session_state.telemetry
-            _gait_res  = st.session_state.ml_prediction
-            _stat_cols = st.columns(5)
-            _stat_cols[0].metric("⏱️ Duration",   f"{SESSION_DURATION_MINUTES} min")
-            _stat_cols[1].metric("📈 Avg EMG",    f"{_tele_snap['emg'].mean():.1f} µV" if not _tele_snap.empty else "—")
-            _stat_cols[2].metric("🦶 Gait Result", _gait_res)
-            _stat_cols[3].metric("😣 Pain",        f"{st.session_state.live_pain}/10")
-            _stat_cols[4].metric("😴 Fatigue",     f"{st.session_state.live_fatigue}/10")
-            st.divider()
-
-            # ── Clinical summary body ──────────────────────────────────────
-            st.markdown("#### 🏥 Clinical Session Summary")
-            if isinstance(_sess, dict) and "error" not in _sess:
-                if _sess.get("title"):
-                    st.markdown(f"**{_sess['title']}**")
-                if _sess.get("summary"):
-                    st.markdown(
-                        f"<p style='font-size:0.88rem;color:#475569;line-height:1.75;margin:10px 0 14px;'>"
-                        f"{_sess['summary']}</p>", unsafe_allow_html=True)
-                _ci, _ca = st.columns(2)
-                with _ci:
-                    if _sess.get("interpretation"):
-                        st.markdown("**📊 Signal Interpretation**")
-                        for _item in _sess["interpretation"]:
-                            st.markdown(f"- {_item}")
-                with _ca:
-                    if _sess.get("actions"):
-                        st.markdown("**⚙️ Parameter Recommendations**")
-                        for _item in _sess["actions"]:
-                            st.markdown(f"- {_item}")
-            elif isinstance(_sess, dict) and "error" in _sess:
-                st.warning(_sess["error"])
-            else:
-                st.markdown(_sess)
-
-            st.divider()
-            if st.button("🔄 Regenerate Summary", key="regenerate_summary"):
+            st.markdown(st.session_state.session_summary_text)
+            if st.button("Regenerate Summary", key="regenerate_summary"):
                 st.session_state.session_summary_generated = False
                 st.rerun()
 
-            # ── Clinician Approval ─────────────────────────────────────────
             st.divider()
             st.subheader("🔐 Clinician Approval")
-            st.info("Review the AI-generated recommendations above before approving parameter changes for the next session.")
+            st.info("Review the AI-generated summary above before approving parameter changes for the next session.")
+
             _col_approve, _col_decline = st.columns(2)
             _session_id = st.session_state.get("current_session_id", None)
+
             with _col_approve:
                 if st.button("✅ Approve Recommendation", type="primary",
                              use_container_width=True, key="btn_approve"):
                     if _session_id:
-                        fb_write(f"patients/{patient_id}/sessions/{_session_id}/approval", {
-                            "status": "approved", "clinician": user_role,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                        fb_write(
+                            f"patients/{patient_id}/sessions/{_session_id}/approval",
+                            {
+                                "status":    "approved",
+                                "clinician": user_role,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                        )
                     log_event(patient_id, "APPROVAL_GRANTED", f"Session={_session_id}")
                     st.success("✅ Recommendation approved and saved to Firebase.")
+
             with _col_decline:
                 if st.button("❌ Decline — Keep Current Parameters",
                              use_container_width=True, key="btn_decline"):
                     if _session_id:
-                        fb_write(f"patients/{patient_id}/sessions/{_session_id}/approval", {
-                            "status": "declined", "clinician": user_role,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                        fb_write(
+                            f"patients/{patient_id}/sessions/{_session_id}/approval",
+                            {
+                                "status":    "declined",
+                                "clinician": user_role,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                        )
                     log_event(patient_id, "APPROVAL_DECLINED", f"Session={_session_id}")
                     st.warning("❌ Declined. Current parameters will be retained.")
+
+            # Live approval status from Firebase
             if _session_id:
                 try:
                     _ap = fb_read(f"patients/{patient_id}/sessions/{_session_id}/approval")
                     if _ap and isinstance(_ap, dict):
-                        _ts = _ap.get("timestamp", "—"); _by = _ap.get("clinician", "—")
+                        _ts = _ap.get("timestamp", "—")
+                        _by = _ap.get("clinician", "—")
                         if _ap.get("status") == "approved":
-                            st.markdown(f"""<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;
-                                padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
-                                <span>✅</span><div><div style="font-size:0.82rem;font-weight:700;color:#15803D;">
-                                Last Decision: Approved</div><div style="font-size:0.75rem;color:#166534;">
-                                {_ts} · {_by}</div></div></div>""", unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;
+                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:1.2rem;">✅</span>
+                                <div>
+                                    <div style="font-size:0.82rem;font-weight:700;color:#15803D;">Last Decision: Approved</div>
+                                    <div style="font-size:0.75rem;color:#166534;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                                </div>
+                            </div>""", unsafe_allow_html=True)
                         elif _ap.get("status") == "declined":
-                            st.markdown(f"""<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;
-                                padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
-                                <span>❌</span><div><div style="font-size:0.82rem;font-weight:700;color:#92400E;">
-                                Last Decision: Declined</div><div style="font-size:0.75rem;color:#78350F;">
-                                {_ts} · {_by}</div></div></div>""", unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;
+                                        padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:1.2rem;">❌</span>
+                                <div>
+                                    <div style="font-size:0.82rem;font-weight:700;color:#92400E;">Last Decision: Declined</div>
+                                    <div style="font-size:0.75rem;color:#78350F;">{_ts} &nbsp;·&nbsp; {_by}</div>
+                                </div>
+                            </div>""", unsafe_allow_html=True)
                 except Exception:
                     pass
 
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis 
+        # =====================================================
+        # 2. SESSION PAIN & FATIGUE TRENDS (improved layout)
+        # =====================================================
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("💪 Segmental Lean Mass Analysis ")
-        st.caption("Percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
-        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
-        statuses = ["Under", "Under", "Under", "Normal", "Normal"]
-        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
-        changes = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
-        col_left, col_right = st.columns([1.2, 0.9], gap="medium")
-        with col_left:
-            st.markdown("#### Performance vs Ideal")
-            for seg, pct, stat, icon in zip(segments, percentages, statuses, icons):
-                bar_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                status_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                st.markdown(f"""
-                <div style="margin-bottom: 22px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                        <span style="font-size: 1.1rem;">{icon}</span>
-                        <span style="font-weight: 600; font-size: 0.9rem;">{seg}</span>
-                        <span style="margin-left: auto; font-size: 0.75rem; background-color: #F1F5F9; padding: 2px 8px; border-radius: 20px; color: {status_color}; font-weight: 500;">{stat}</span>
-                    </div>
-                    <div style="background-color: #E2E8F0; border-radius: 12px; height: 28px; width: 100%; position: relative;">
-                        <div style="background: linear-gradient(90deg, {bar_color}, {bar_color}CC); width: {pct}%; height: 28px; border-radius: 12px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;">
-                            <span style="color: white; font-size: 0.75rem; font-weight: 600;">{pct:.1f}%</span>
-                        </div>
-                    </div>
+        st.subheader("📊 Session Pain & Fatigue Trends")
+
+        _pr_times  = [0, 5, 10, 15, 20]
+        _pr_pain   = [5, 4, 3, 2, 1]
+        _pr_fatigue = [6, 5, 4, 3, 2]
+
+        # Helper for shaded zones
+        def _make_zone(fig, y0, y1, color, label):
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.06,
+                          line_width=0, annotation_text=label,
+                          annotation_position="right", annotation_font_size=9,
+                          annotation_font_color="#94A3B8")
+
+        col_p1, col_p2 = st.columns(2, gap="large")
+
+        with col_p1:
+            st.markdown("#### Pain Score (0–10)")
+            _fig_pain = go.Figure()
+            _fig_pain.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_pain,
+                mode="lines+markers+text",
+                name="Pain",
+                line=dict(color="#EF5350", width=3, shape="spline"),
+                marker=dict(size=12, color="#EF5350", line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(239,83,80,0.1)",
+                text=[str(v) for v in _pr_pain],
+                textposition="top center",
+                textfont=dict(size=12, color="#B71C1C", family="Arial Black"),
+                hovertemplate="<b>%{x} min</b><br>Pain: %{y}/10<extra></extra>"
+            ))
+            _fig_pain.add_hline(y=7, line_dash="dash", line_color="#EF5350", line_width=1.5,
+                                annotation_text="High (≥7)", annotation_position="right",
+                                annotation_font_size=10, annotation_font_color="#EF5350")
+            _fig_pain.add_hline(y=4, line_dash="dot", line_color="#F4A261", line_width=1.5,
+                                annotation_text="Moderate (≥4)", annotation_position="right",
+                                annotation_font_size=10, annotation_font_color="#F4A261")
+            _make_zone(_fig_pain, 0, 4,   "#16A34A", "")
+            _make_zone(_fig_pain, 4, 7,   "#F4A261", "")
+            _make_zone(_fig_pain, 7, 10,  "#EF5350", "")
+            _fig_pain.update_layout(
+                height=320,
+                margin=dict(l=10, r=60, t=30, b=30),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="Session Time (min)", tickvals=_pr_times,
+                    ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                    gridcolor="#E2E8F0", showline=True,
+                    linecolor="#CBD5E1", tickfont=dict(size=11)
+                ),
+                yaxis=dict(
+                    title="Score", range=[0, 10], dtick=2,
+                    gridcolor="#E2E8F0", showline=True,
+                    linecolor="#CBD5E1", tickfont=dict(size=11)
+                ),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_pain, use_container_width=True)
+
+            # Stats strip
+            _p_start, _p_end = _pr_pain[0], _pr_pain[-1]
+            _p_delta = _p_end - _p_start
+            _p_col = "#16A34A" if _p_delta < 0 else "#EF5350" if _p_delta > 0 else "#64748B"
+            _p_arrow = "↓" if _p_delta < 0 else "↑" if _p_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:12px;margin-top:8px;">
+                <div style="flex:1;background:#FEF2F2;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">START</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#EF5350;">{_p_start}/10</div>
                 </div>
-                """, unsafe_allow_html=True)
-        with col_right:
-            st.markdown("#### Soft Lean Mass (kg)")
-            for seg, mass, change, icon in zip(segments, masses, changes, icons):
-                if change.startswith("-"):
-                    change_color = "#DC2626"
-                    arrow = "↓"
-                elif change == "0.00":
-                    change_color = "#64748B"
-                    arrow = "→"
-                else:
-                    change_color = "#16A34A"
-                    arrow = "↑"
-                sign = "" if change.startswith("-") else "+" if change != "0.00" else ""
-                display_change = f"{sign}{change}" if change != "0.00" else "0.00"
-                st.markdown(f"""
-                <div style="background-color: #F8FAFC; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; border-left: 4px solid {change_color};">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 1.1rem;">{icon}</span>
-                            <span style="font-weight: 500;">{seg}</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <span style="font-size: 1.3rem; font-weight: 700;">{mass}</span>
-                            <span style="font-size: 0.8rem;"> kg</span>
-                            <div style="font-size: 0.7rem; color: {change_color};">
-                                {arrow} {display_change} vs previous
-                            </div>
-                        </div>
-                    </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">END</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#16A34A;">{_p_end}/10</div>
                 </div>
-                """, unsafe_allow_html=True)
-            st.caption("📈 Change from previous measurement (demo data)")
+                <div style="flex:1;background:#F8FAFC;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">CHANGE</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:{_p_col};">{_p_arrow} {abs(_p_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        with col_p2:
+            st.markdown("#### Fatigue Level (0–10)")
+            _fig_fat = go.Figure()
+            _fig_fat.add_trace(go.Scatter(
+                x=_pr_times, y=_pr_fatigue,
+                mode="lines+markers+text",
+                name="Fatigue",
+                line=dict(color="#3B82F6", width=3, shape="spline"),
+                marker=dict(size=12, color="#3B82F6", line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.1)",
+                text=[str(v) for v in _pr_fatigue],
+                textposition="top center",
+                textfont=dict(size=12, color="#1D4ED8", family="Arial Black"),
+                hovertemplate="<b>%{x} min</b><br>Fatigue: %{y}/10<extra></extra>"
+            ))
+            _fig_fat.add_hline(y=7, line_dash="dash", line_color="#3B82F6", line_width=1.5,
+                               annotation_text="High (≥7)", annotation_position="right",
+                               annotation_font_size=10, annotation_font_color="#3B82F6")
+            _fig_fat.add_hline(y=4, line_dash="dot", line_color="#93C5FD", line_width=1.5,
+                               annotation_text="Moderate (≥4)", annotation_position="right",
+                               annotation_font_size=10, annotation_font_color="#93C5FD")
+            _make_zone(_fig_fat, 0, 4,  "#16A34A", "")
+            _make_zone(_fig_fat, 4, 7,  "#3B82F6", "")
+            _make_zone(_fig_fat, 7, 10, "#1D4ED8", "")
+            _fig_fat.update_layout(
+                height=320,
+                margin=dict(l=10, r=60, t=30, b=30),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="Session Time (min)", tickvals=_pr_times,
+                    ticktext=["0 min","5 min","10 min","15 min","20 min"],
+                    gridcolor="#E2E8F0", showline=True,
+                    linecolor="#CBD5E1", tickfont=dict(size=11)
+                ),
+                yaxis=dict(
+                    title="Level", range=[0, 10], dtick=2,
+                    gridcolor="#E2E8F0", showline=True,
+                    linecolor="#CBD5E1", tickfont=dict(size=11)
+                ),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_fat, use_container_width=True)
+
+            _f_start, _f_end = _pr_fatigue[0], _pr_fatigue[-1]
+            _f_delta = _f_end - _f_start
+            _f_col = "#16A34A" if _f_delta < 0 else "#EF5350" if _f_delta > 0 else "#64748B"
+            _f_arrow = "↓" if _f_delta < 0 else "↑" if _f_delta > 0 else "→"
+            st.markdown(f"""
+            <div style="display:flex;gap:12px;margin-top:8px;">
+                <div style="flex:1;background:#EFF6FF;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">START</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#3B82F6;">{_f_start}/10</div>
+                </div>
+                <div style="flex:1;background:#F0FDF4;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">END</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:#16A34A;">{_f_end}/10</div>
+                </div>
+                <div style="flex:1;background:#F8FAFC;border-radius:12px;padding:10px 8px;text-align:center;">
+                    <div style="font-size:0.75rem;font-weight:600;color:#94A3B8;">CHANGE</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:{_f_col};">{_f_arrow} {abs(_f_delta)}</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        # Keep these dataframes for export report
+        pain_score_progress = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Pain Score': _pr_pain})
+        fatigue_progress    = pd.DataFrame({'Time': ['0 min','5 min','10 min','15 min','20 min'], 'Fatigue Level': _pr_fatigue})
+
+        st.divider()
+
+        # =====================================================
+        # 3. MUSCLE ACTIVATION (EMG) – 20‑min session overview
+        # =====================================================
+        st.subheader("⚡ Muscle Activation (EMG) — Last 20‑Min Session")
+        st.markdown("_Real‑time EMG amplitude during the session (smoothed with 20‑point moving average). Colour indicates muscle state: 🔴 Active, 🟡 Medium, 🔵 Relax._")
+
+        # Embedded EMG data (the same as in the original professional dashboard)
+        _emg_mins   = [0.0, 0.03, 0.07, 0.1, 0.13, 0.17, 0.2, 0.23, 0.27, 0.3, 0.33, 0.37, 0.4, 0.43, 0.47, 0.5, 0.53, 0.57, 0.6, 0.63, 0.67, 0.7, 0.73, 0.77, 0.8, 0.83, 0.87, 0.9, 0.93, 0.97, 1.0, 1.03, 1.07, 1.1, 1.13, 1.17, 1.2, 1.23, 1.27, 1.3, 1.33, 1.37, 1.4, 1.43, 1.47, 1.5, 1.53, 1.57, 1.6, 1.63, 1.67, 1.7, 1.73, 1.77, 1.8, 1.83, 1.87, 1.9, 1.93, 1.97, 2.0, 2.03, 2.07, 2.1, 2.13, 2.17, 2.2, 2.23, 2.27, 2.3, 2.33, 2.37, 2.4, 2.43, 2.47, 2.5, 2.53, 2.57, 2.6, 2.63, 2.67, 2.7, 2.73, 2.77, 2.8, 2.83, 2.87, 2.9, 2.93, 2.97, 3.0, 3.03, 3.07, 3.1, 3.13, 3.17, 3.2, 3.23, 3.27, 3.3, 3.33, 3.37, 3.4, 3.43, 3.47, 3.5, 3.53, 3.57, 3.6, 3.63, 3.67, 3.7, 3.73, 3.77, 3.8, 3.83, 3.87, 3.9, 3.93, 3.97, 4.0, 4.03, 4.07, 4.1, 4.13, 4.17, 4.2, 4.23, 4.27, 4.3, 4.33, 4.37, 4.4, 4.43, 4.47, 4.5, 4.53, 4.57, 4.6, 4.63, 4.67, 4.7, 4.73, 4.77, 4.8, 4.83, 4.87, 4.9, 4.93, 4.97, 5.0, 5.03, 5.07, 5.1, 5.13, 5.17, 5.2, 5.23, 5.27, 5.3, 5.33, 5.37, 5.4, 5.43, 5.47, 5.5, 5.53, 5.57, 5.6, 5.63, 5.67, 5.7, 5.73, 5.77, 5.8, 5.83, 5.87, 5.9, 5.93, 5.97, 6.02, 6.05, 6.08, 6.12, 6.15, 6.18, 6.22, 6.25, 6.28, 6.32, 6.35, 6.38, 6.42, 6.45, 6.48, 6.52, 6.55, 6.58, 6.62, 6.65, 6.68, 6.72, 6.75, 6.78, 6.82, 6.85, 6.88, 6.92, 6.95, 6.98, 7.02, 7.05, 7.08, 7.12, 7.15, 7.18, 7.22, 7.25, 7.28, 7.32, 7.35, 7.38, 7.42, 7.45, 7.48, 7.52, 7.55, 7.58, 7.62, 7.65, 7.68, 7.72, 7.75, 7.78, 7.82, 7.85, 7.88, 7.92, 7.95, 7.98, 8.02, 8.05, 8.08, 8.12, 8.15, 8.18, 8.22, 8.25, 8.28, 8.32, 8.35, 8.38, 8.42, 8.45, 8.48, 8.52, 8.55, 8.58, 8.62, 8.65, 8.68, 8.72, 8.75, 8.78, 8.82, 8.85, 8.88, 8.92, 8.95, 8.98, 9.02, 9.05, 9.08, 9.12, 9.15, 9.18, 9.22, 9.25, 9.28, 9.32, 9.35, 9.38, 9.42, 9.45, 9.48, 9.52, 9.55, 9.58, 9.62, 9.65, 9.68, 9.72, 9.75, 9.78, 9.82, 9.85, 9.88, 9.92, 9.95, 9.98, 10.02, 10.05, 10.08, 10.12, 10.15, 10.18, 10.22, 10.25, 10.28, 10.32, 10.35, 10.38, 10.42, 10.45, 10.48, 10.52, 10.55, 10.58, 10.62, 10.65, 10.68, 10.72, 10.75, 10.78, 10.82, 10.85, 10.88, 10.92, 10.95, 10.98, 11.02, 11.05, 11.08, 11.12, 11.15, 11.18, 11.22, 11.25, 11.28, 11.32, 11.35, 11.38, 11.42, 11.45, 11.48, 11.52, 11.55, 11.58, 11.62, 11.65, 11.68, 11.72, 11.75, 11.78, 11.82, 11.85, 11.88, 11.92, 11.95, 11.98, 12.02, 12.05, 12.08, 12.12, 12.15, 12.18, 12.22, 12.25, 12.28, 12.32, 12.35, 12.38, 12.42, 12.45, 12.48, 12.52, 12.55, 12.58, 12.62, 12.65, 12.68, 12.72, 12.75, 12.78, 12.82, 12.85, 12.88, 12.92, 12.95, 12.98, 13.02, 13.05, 13.08, 13.12, 13.15, 13.18, 13.22, 13.25, 13.28, 13.32, 13.35, 13.38, 13.42, 13.45, 13.48, 13.52, 13.55, 13.58, 13.62, 13.65, 13.68, 13.72, 13.75, 13.78, 13.82, 13.85, 13.88, 13.92, 13.95, 13.98, 14.02, 14.05, 14.08, 14.12, 14.15, 14.18, 14.22, 14.25, 14.28, 14.32, 14.35, 14.38, 14.42, 14.45, 14.48, 14.52, 14.55, 14.58, 14.62, 14.65, 14.68, 14.72, 14.75, 14.78, 14.82, 14.85, 14.88, 14.92, 14.95, 14.98, 15.02, 15.05, 15.08, 15.12, 15.15, 15.18, 15.22, 15.25, 15.28, 15.32, 15.35, 15.38, 15.42, 15.45, 15.48, 15.52, 15.55, 15.58, 15.62, 15.65, 15.68, 15.72, 15.75, 15.78, 15.82, 15.85, 15.88, 15.92, 15.95, 15.98, 16.02, 16.05, 16.08, 16.12, 16.15, 16.18, 16.22, 16.25, 16.28, 16.32, 16.35, 16.38, 16.42, 16.45, 16.48, 16.52, 16.55, 16.58, 16.62, 16.65, 16.68, 16.72, 16.75, 16.78, 16.82, 16.85, 16.88, 16.92, 16.95, 16.98, 17.02, 17.05, 17.08, 17.12, 17.15, 17.18, 17.22, 17.25, 17.28, 17.32, 17.35, 17.38, 17.42, 17.45, 17.48, 17.52, 17.55, 17.58, 17.62, 17.65, 17.68, 17.72, 17.75, 17.78, 17.82, 17.85, 17.88, 17.92, 17.95, 17.98, 18.02, 18.05, 18.08, 18.12, 18.15, 18.18, 18.22, 18.25, 18.28, 18.32, 18.35, 18.38, 18.42, 18.45, 18.48, 18.52, 18.55, 18.58, 18.62, 18.65, 18.68, 18.72, 18.75, 18.78, 18.82, 18.85, 18.88, 18.92, 18.95, 18.98, 19.02, 19.05, 19.08, 19.12, 19.15, 19.18, 19.22, 19.25, 19.28, 19.32, 19.35, 19.38, 19.42, 19.45, 19.48, 19.52, 19.55, 19.58, 19.62, 19.65, 19.68, 19.72, 19.75, 19.78, 19.82, 19.85, 19.88, 19.92, 19.95, 19.98]
+        _emg_vals   = [454.0, 446.0, 446.0, 460.0, 495.0, 381.0, 466.0, 502.0, 443.0, 418.0, 438.0, 455.0, 448.0, 467.0, 431.0, 414.0, 500.0, 401.0, 364.0, 338.0, 533.0, 346.0, 429.0, 499.0, 509.0, 504.0, 386.0, 458.0, 538.0, 586.0, 523.0, 545.0, 455.0, 455.0, 569.0, 431.0, 462.0, 350.0, 443.0, 455.0, 394.0, 323.0, 298.0, 427.0, 454.0, 526.0, 452.0, 467.0, 458.0, 451.0, 510.0, 433.0, 454.0, 455.0, 460.0, 469.0, 447.0, 436.0, 449.0, 455.0, 458.0, 516.0, 491.0, 480.0, 454.0, 458.0, 463.0, 466.0, 471.0, 457.0, 457.0, 457.0, 441.0, 510.0, 494.0, 466.0, 447.0, 449.0, 470.0, 362.0, 461.0, 459.0, 454.0, 460.0, 375.0, 467.0, 456.0, 456.0, 466.0, 601.0, 531.0, 413.0, 430.0, 461.0, 434.0, 439.0, 576.0, 403.0, 433.0, 432.0, 473.0, 450.0, 454.0, 443.0, 341.0, 510.0, 524.0, 567.0, 465.0, 384.0, 438.0, 347.0, 412.0, 474.0, 359.0, 365.0, 435.0, 529.0, 504.0, 522.0, 434.0, 440.0, 373.0, 170.0, 337.0, 226.0, 501.0, 415.0, 652.0, 583.0, 429.0, 595.0, 549.0, 359.0, 483.0, 547.0, 447.0, 595.0, 666.0, 377.0, 521.0, 446.0, 377.0, 461.0, 372.0, 432.0, 559.0, 423.0, 411.0, 604.0, 432.0, 428.0, 498.0, 549.0, 579.0, 441.0, 529.0, 519.0, 558.0, 549.0, 643.0, 530.0, 537.0, 435.0, 454.0, 543.0, 718.0, 583.0, 749.0, 512.0, 510.0, 658.0, 373.0, 567.0, 375.0, 669.0, 473.0, 394.0, 450.0, 734.0, 390.0, 689.0, 420.0, 547.0, 565.0, 550.0, 586.0, 558.0, 549.0, 368.0, 424.0, 428.0, 373.0, 376.0, 543.0, 409.0, 115.0, 284.0, 372.0, 372.0, 373.0, 416.0, 680.0, 358.0, 540.0, 569.0, 428.0, 609.0, 663.0, 505.0, 549.0, 433.0, 415.0, 372.0, 562.0, 358.0, 783.0, 385.0, 378.0, 372.0, 510.0, 327.0, 572.0, 417.0, 373.0, 508.0, 591.0, 549.0, 421.0, 488.0, 377.0, 339.0, 514.0, 548.0, 626.0, 372.0, 524.0, 381.0, 561.0, 416.0, 549.0, 373.0, 646.0, 415.0, 135.0, 297.0, 300.0, 518.0, 247.0, 432.0, 420.0, 532.0, 397.0, 511.0, 538.0, 408.0, 372.0, 305.0, 549.0, 356.0, 396.0, 288.0, 372.0, 559.0, 558.0, 277.0, 502.0, 344.0, 486.0, 238.0, 549.0, 410.0, 373.0, 372.0, 400.0, 223.0, 549.0, 196.0, 372.0, 278.0, 549.0, 415.0, 305.0, 349.0, 353.0, 314.0, 373.0, 253.0, 413.0, 362.0, 266.0, 519.0, 336.0, 273.0, 502.0, 462.0, 302.0, 558.0, 287.0, 372.0, 215.0, 532.0, 331.0, 391.0, 272.0, 559.0, 321.0, 372.0, 310.0, 513.0, 173.0, 373.0, 191.0, 549.0, 243.0, 503.0, 238.0, 523.0, 253.0, 502.0, 300.0, 502.0, 222.0, 477.0, 268.0, 509.0, 231.0, 373.0, 205.0, 494.0, 445.0, 414.0, 208.0, 503.0, 230.0, 550.0, 360.0, 553.0, 190.0, 549.0, 203.0, 559.0, 79.0, 428.0, 142.0, 316.0, 131.0, 549.0, 197.0, 558.0, 207.0, 440.0, 201.0, 372.0, 180.0, 502.0, 222.0, 322.0, 288.0, 361.0, 281.0, 373.0, 326.0, 375.0, 371.0, 343.0, 321.0, 373.0, 336.0, 427.0, 494.0, 165.0, 553.0, 389.0, 254.0, 291.0, 361.0, 217.0, 549.0, 292.0, 305.0, 315.0, 352.0, 160.0, 540.0, 387.0, 547.0, 289.0, 373.0, 170.0, 550.0, 307.0, 372.0, 405.0, 432.0, 196.0, 550.0, 203.0, 558.0, 352.0, 391.0, 236.0, 550.0, 253.0, 549.0, 400.0, 559.0, 272.0, 360.0, 409.0, 503.0, 207.0, 502.0, 322.0, 334.0, 317.0, 549.0, 257.0, 549.0, 296.0, 423.0, 432.0, 479.0, 439.0, 433.0, 419.0, 413.0, 504.0, 416.0, 409.0, 375.0, 469.0, 442.0, 408.0, 361.0, 422.0, 458.0, 396.0, 427.0, 366.0, 470.0, 489.0, 451.0, 380.0, 364.0, 497.0, 502.0, 456.0, 368.0, 414.0, 456.0, 476.0, 428.0, 407.0, 448.0, 503.0, 463.0, 428.0, 420.0, 433.0, 482.0, 452.0, 412.0, 405.0, 464.0, 506.0, 453.0, 377.0, 413.0, 494.0, 472.0, 428.0, 389.0, 406.0, 490.0, 489.0, 445.0, 412.0, 384.0, 466.0, 458.0, 446.0, 357.0, 409.0, 463.0, 458.0, 433.0, 374.0, 418.0, 470.0, 443.0, 384.0, 355.0, 424.0, 464.0, 432.0, 409.0, 363.0, 457.0, 466.0, 426.0, 385.0, 352.0, 482.0, 455.0, 422.0, 376.0, 393.0, 482.0, 439.0, 392.0, 371.0, 369.0, 472.0, 412.0, 438.0, 327.0, 407.0, 467.0, 449.0, 413.0, 379.0, 367.0, 467.0, 447.0, 405.0, 397.0, 445.0, 494.0, 440.0, 397.0, 376.0, 382.0, 487.0, 435.0, 414.0, 397.0, 431.0, 494.0, 458.0, 450.0, 466.0, 519.0, 536.0, 488.0, 506.0, 490.0, 502.0, 484.0, 513.0, 481.0, 451.0, 446.0, 514.0, 523.0, 461.0, 480.0, 445.0, 477.0, 486.0, 473.0, 472.0, 498.0, 481.0, 510.0, 465.0, 505.0, 504.0, 446.0, 520.0, 515.0, 503.0, 488.0, 485.0, 415.0, 519.0, 510.0, 490.0, 502.0, 464.0, 492.0, 535.0, 490.0, 503.0, 496.0, 467.0, 548.0, 477.0, 507.0, 463.0, 479.0, 471.0, 474.0, 510.0, 480.0, 472.0, 460.0, 502.0, 445.0, 455.0]
+        _emg_states = ["MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "ACTIVE", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "ACTIVE", "MEDIUM", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "RELAX", "RELAX", "RELAX", "RELAX", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "ACTIVE", "RELAX", "ACTIVE", "ACTIVE", "ACTIVE", "MEDIUM", "MEDIUM", "RELAX", "ACTIVE", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "MEDIUM", "MEDIUM", "MEDIUM", "ACTIVE", "RELAX", "MEDIUM"]
+        _avg_emg    = 433.6
+        _max_emg    = 783
+        _n_emg      = 600
+        _dom_state  = "RELAX"
+
+        _sc_map = {"ACTIVE": "#EF5350",   # red
+                   "MEDIUM": "#F4A261",   # orange
+                   "RELAX":  "#3B82F6"}   # blue
+
+        _fig_emg = go.Figure()
+        # Add scatter points by state
+        for _st, _sc in _sc_map.items():
+            _xi = [_emg_mins[i] for i in range(len(_emg_vals)) if _emg_states[i] == _st]
+            _yi = [_emg_vals[i] for i in range(len(_emg_vals)) if _emg_states[i] == _st]
+            if _xi:
+                _fig_emg.add_trace(go.Scatter(
+                    x=_xi, y=_yi, mode="markers", name=_st.title(),
+                    marker=dict(size=5, color=_sc, opacity=0.8),
+                    hovertemplate="<b>%{y:.0f} µV</b> @ %{x:.1f} min<extra>" + _st + "</extra>"
+                ))
+        # Add moving average line
+        _sm_w = 20
+        _smoothed = [sum(_emg_vals[max(0,i-_sm_w):i+1]) / len(_emg_vals[max(0,i-_sm_w):i+1]) for i in range(len(_emg_vals))]
+        _fig_emg.add_trace(go.Scatter(
+            x=_emg_mins, y=_smoothed, mode="lines", name="Trend (20-pt avg)",
+            line=dict(color="#264653", width=3),
+            hovertemplate="<b>Trend: %{y:.0f} µV</b><extra></extra>"
+        ))
+        # Reference thresholds
+        _fig_emg.add_hline(y=700, line_dash="dot", line_color="#EF5350", line_width=1.5,
+                           annotation_text="Overexertion 700 µV",
+                           annotation_position="top right", annotation_font_size=11)
+        _fig_emg.add_hline(y=500, line_dash="dot", line_color="#F4A261", line_width=1.5,
+                           annotation_text="Fatigue 500 µV",
+                           annotation_position="top right", annotation_font_size=11)
+        _fig_emg.add_hline(y=300, line_dash="dot", line_color="#81B29A", line_width=1.5,
+                           annotation_text="Moderate 300 µV",
+                           annotation_position="top right", annotation_font_size=11)
+        _fig_emg.update_layout(
+            height=400,
+            margin=dict(l=15, r=15, t=30, b=40),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Session Time (minutes)", gridcolor="#E2E8F0",
+                       ticksuffix=" min", range=[0, 20], tickfont=dict(size=11)),
+            yaxis=dict(title="EMG Amplitude (µV)", gridcolor="#E2E8F0",
+                       range=[0, 850], tickfont=dict(size=11)),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                        xanchor="right", x=1, font=dict(size=10)),
+            hovermode="x unified"
+        )
+        st.plotly_chart(_fig_emg, use_container_width=True)
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Long-Term Musculoskeletal Health
+        # =====================================================
+        # 4. SEGMENTAL LEAN MASS ANALYSIS (pentagon radar chart)
+        # =====================================================
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("💪 Segmental Lean Mass Analysis")
+        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
+
+        _seg_names  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+        _pcts       = [65.3, 84.8, 69.8, 93.4, 93.9]
+        _statuses   = ["Under", "Under", "Under", "Normal", "Normal"]
+        _masses     = [1.13, 13.3, 1.21, 5.11, 5.13]
+        _changes    = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
+        _icons      = ["💪", "🎯", "💪", "🦵", "🦵"]
+
+        def _seg_color(p):
+            return "#EF5350" if p < 90 else "#2A9D8F"
+
+        def _change_meta(c):
+            if c.startswith("-"):    return "#DC2626", "↓"
+            elif c in ("0.00","0"):  return "#94A3B8", "→"
+            else:                    return "#16A34A", "↑"
+
+        # Pentagon radar — clockwise from top: Trunk, Right Arm, Right Leg, Left Leg, Left Arm
+        _radar_order = ["Trunk", "Right Arm", "Right Leg", "Left Leg", "Left Arm"]
+        _radar_pcts  = [_pcts[_seg_names.index(s)] for s in _radar_order]
+        _radar_pcts_closed = _radar_pcts + [_radar_pcts[0]]
+        _radar_theta = _radar_order + [_radar_order[0]]
+
+        _fig_radar = go.Figure()
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=_radar_pcts_closed,
+            theta=_radar_theta,
+            fill="toself",
+            fillcolor="rgba(42,157,143,0.18)",
+            line=dict(color="#2A9D8F", width=2),
+            marker=dict(size=7, color=[_seg_color(p) for p in _radar_pcts + [_radar_pcts[0]]]),
+            name="% of ideal",
+            hovertemplate="%{theta}: %{r:.1f}%<extra></extra>"
+        ))
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=[90]*6,
+            theta=_radar_theta,
+            fill="none",
+            line=dict(color="rgba(46,125,50,0.35)", width=1.5, dash="dash"),
+            hoverinfo="skip",
+            showlegend=False
+        ))
+        _fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(240,247,255,0.6)",
+                radialaxis=dict(
+                    visible=True, range=[0,100],
+                    tickvals=[25,50,75,100],
+                    tickfont=dict(size=8, color="#94A3B8"),
+                    gridcolor="#E2E8F0", linecolor="#E2E8F0"
+                ),
+                angularaxis=dict(
+                    tickmode="array",
+                    tickvals=_radar_order,
+                    ticktext=[f"<b>{s}</b>" for s in _radar_order],
+                    tickfont=dict(size=11),
+                    rotation=90, direction="clockwise",
+                    gridcolor="#E2E8F0", linecolor="#E2E8F0"
+                )
+            ),
+            showlegend=False,
+            height=360,
+            margin=dict(l=50, r=50, t=30, b=30),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+
+        _col_fig, _col_cards = st.columns([1, 1.05], gap="large")
+
+        with _col_fig:
+            st.plotly_chart(_fig_radar, use_container_width=True)
+            st.caption("Dashed ring = 90% ideal threshold")
+
+        with _col_cards:
+            st.markdown("#### Soft Lean Mass (kg)")
+            for _seg, _mass, _chg, _pct, _stat, _icon in zip(_seg_names, _masses, _changes, _pcts, _statuses, _icons):
+                _cc, _arr = _change_meta(_chg)
+                _sc = _seg_color(_pct)
+                _disp = _chg if _chg.startswith("-") else (f"+{_chg}" if _chg != "0.00" else "0.0")
+                _cbg = "#FEE2E2" if _cc == "#DC2626" else "#DCFCE7" if _cc == "#16A34A" else "#F1F5F9"
+                st.markdown(
+                    f'<div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;'
+                    f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
+                    f'<div style="display:flex;align-items:center;gap:9px;">'
+                    f'<span style="font-size:1.2rem;">{_icon}</span>'
+                    f'<div>'
+                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{_seg}</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{_mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
+                    f'<div style="font-size:12px;font-weight:600;color:{_sc};">{_stat} · {_pct:.1f}%</div>'
+                    f'</div></div>'
+                    f'<div style="background:{_cbg};border-radius:8px;padding:5px 10px;text-align:center;min-width:46px;">'
+                    f'<div style="font-size:15px;color:{_cc};">{_arr}</div>'
+                    f'<div style="font-size:11px;font-weight:600;color:{_cc};">{_disp}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True
+                )
+            st.caption("Change from previous measurement")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # =====================================================
+        # 5. LONG-TERM MUSCULOSKELETAL HEALTH
+        # =====================================================
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📈 Long-Term Musculoskeletal Health")
         st.markdown("**Skeletal Muscle Mass Trend (Last 30 Days)**")
@@ -1753,33 +1999,156 @@ if user_role == "Doctor":
         st.caption("Showing estimated skeletal muscle mass trajectory based on bio‑impedance analysis.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Session Summary & Progress
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📊 Session Summary & Progress")
-        col_p1, col_p2 = st.columns(2)
-        pain_score_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Pain Score': [5, 4, 3, 2, 1]})
-        fatigue_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'Fatigue Level': [6, 5, 4, 3, 2]})
-        with col_p1:
-            st.markdown("**Pain Score Trend**")
-            st.line_chart(pain_score_progress.set_index('Time'), color="#E57373", height=250)
-        with col_p2:
-            st.markdown("**Fatigue Level Trend**")
-            st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6", height=250)
-        st.markdown("**Muscle Activation (EMG) - Session Overview**")
-        emg_progress = pd.DataFrame({'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'], 'EMG Amplitude': [15, 18, 20, 22, 24]})
-        st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F", height=250)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # Session Audit Trail
+        # =====================================================
+        # 6. SESSION AUDIT TRAIL
+        # =====================================================
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📋 Session Audit Trail")
+
         df_logs = read_logs(patient_id)
-        st.dataframe(df_logs, use_container_width=True, height=300)
-        csv = df_logs.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Audit Trail in CSV", csv, f"audit_{patient_id}.csv", "text/csv")
+
+        if df_logs.empty:
+            st.markdown("""
+            <div style="text-align:center;padding:40px 0;color:#94A3B8;">
+                <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+                <div style="font-size:0.95rem;font-weight:600;color:#64748B;">No audit events recorded for this patient.</div>
+                <div style="font-size:0.8rem;margin-top:4px;">Events will appear here once a session is started.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            # Summary stat tiles
+            _au_starts  = df_logs[df_logs['event'] == 'SESSION_START'].shape[0]
+            _au_stops   = df_logs[df_logs['event'] == 'SESSION_STOP'].shape[0]
+            _au_emrg    = df_logs[df_logs['event'] == 'EMERGENCY_STOP'].shape[0]
+            _au_params  = df_logs[df_logs['event'] == 'PARAM_CHANGE'].shape[0]
+            _au_last    = str(df_logs['ts'].iloc[0])[:16].replace("T", " ")
+
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;">
+                <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#15803D;">{_au_starts}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#166534;">SESSIONS STARTED</div>
+                </div>
+                <div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#B45309;">{_au_stops}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#92400E;">SESSIONS STOPPED</div>
+                </div>
+                <div style="background:{"#FEF2F2" if _au_emrg > 0 else "#F8FAFC"};border:1px solid {"#FECACA" if _au_emrg > 0 else "#E2E8F0"};border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:{"#DC2626" if _au_emrg > 0 else "#94A3B8"};">{_au_emrg}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:{"#991B1B" if _au_emrg > 0 else "#64748B"};">EMERGENCY STOPS</div>
+                </div>
+                <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:1.6rem;font-weight:700;color:#6D28D9;">{_au_params}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#5B21B6;">PARAM ADJUSTMENTS</div>
+                </div>
+                <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:12px;text-align:center;">
+                    <div style="font-size:0.82rem;font-weight:700;color:#0369A1;">{_au_last}</div>
+                    <div style="font-size:0.72rem;font-weight:600;color:#075985;">LAST EVENT</div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Filter bar
+            _au_fc1, _au_fc2, _au_fc3 = st.columns([1.2, 2, 0.8])
+            _au_all_evts = ["All Events"] + sorted(df_logs['event'].unique().tolist())
+            with _au_fc1:
+                _au_evt_filter = st.selectbox("Event Type", _au_all_evts,
+                                              key="audit_evt_filter", label_visibility="collapsed")
+            with _au_fc2:
+                _au_search = st.text_input("Search", placeholder="🔍  Search by event or details…",
+                                           key="audit_search", label_visibility="collapsed")
+            with _au_fc3:
+                _au_show_n = st.selectbox("Show", [20, 50, 100, 200],
+                                          key="audit_show_n", label_visibility="collapsed")
+
+            _au_filtered = df_logs.copy()
+            if _au_evt_filter != "All Events":
+                _au_filtered = _au_filtered[_au_filtered['event'] == _au_evt_filter]
+            if _au_search:
+                _au_filtered = _au_filtered[
+                    _au_filtered['details'].str.contains(_au_search, case=False, na=False) |
+                    _au_filtered['event'].str.contains(_au_search, case=False, na=False)
+                ]
+            _au_filtered = _au_filtered.head(_au_show_n)
+
+            # Table header
+            st.markdown("""
+            <div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;
+                        background:#F1F5F9;border:1px solid #E2E8F0;
+                        border-radius:8px 8px 0 0;padding:8px 14px;margin-top:8px;">
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">DATE / TIME</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">EVENT</span>
+                <span style="font-size:0.72rem;font-weight:700;color:#64748B;">DETAILS</span>
+            </div>""", unsafe_allow_html=True)
+
+            _au_ecfg = {
+                "SESSION_START":     ("#DCFCE7", "#15803D", "#F0FDF4", "Session Started"),
+                "SESSION_STOP":      ("#FEF9C3", "#92400E", "#FFFBEB", "Session Stopped"),
+                "SESSION_PAUSE":     ("#DBEAFE", "#1D4ED8", "#EFF6FF", "Session Paused"),
+                "EMERGENCY_STOP":    ("#FEE2E2", "#991B1B", "#FFF5F5", "⚠ Emergency Stop"),
+                "PARAM_CHANGE":      ("#EDE9FE", "#5B21B6", "#F5F3FF", "Parameter Adjusted"),
+                "INBODY_OCR_UPLOAD": ("#CFFAFE", "#0E7490", "#F0FDFF", "InBody Scan Uploaded"),
+                "APPROVAL_GRANTED":  ("#DCFCE7", "#15803D", "#F0FDF4", "✅ Approval Granted"),
+                "APPROVAL_DECLINED": ("#FEF9C3", "#92400E", "#FFFBEB", "❌ Approval Declined"),
+            }
+            _au_default = ("#E2E8F0", "#475569", "#F8FAFC", "System Event")
+
+            _au_rows_html = ""
+            for _au_i, (_, _au_row) in enumerate(_au_filtered.iterrows()):
+                _au_dc, _au_tc, _au_bg, _au_lbl = _au_ecfg.get(_au_row['event'], _au_default)
+                _au_det = str(_au_row['details']) if _au_row['details'] else "—"
+                _au_ts  = str(_au_row['ts'])[:19]
+                _au_date = _au_ts[:10]
+                _au_time = _au_ts[11:19] if len(_au_ts) > 10 else ""
+                _au_border_top = "1px solid #E2E8F0" if _au_i > 0 else "none"
+                _au_radius = "0 0 8px 8px" if _au_i == len(_au_filtered) - 1 else "0"
+                _au_rows_html += (
+                    f'<div style="display:grid;grid-template-columns:160px 190px 1fr;gap:0;'
+                    f'background:{_au_bg};border-left:1px solid #E2E8F0;border-right:1px solid #E2E8F0;'
+                    f'border-top:{_au_border_top};border-bottom:1px solid #E2E8F0;'
+                    f'border-radius:{_au_radius};padding:9px 14px;align-items:center;">'
+                    f'<div>'
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#1E293B;font-family:monospace;">{_au_date}</div>'
+                    f'<div style="font-size:0.72rem;color:#94A3B8;font-family:monospace;">{_au_time}</div>'
+                    f'</div>'
+                    f'<div style="display:flex;align-items:center;gap:7px;">'
+                    f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+                    f'background:{_au_dc};border:1.5px solid {_au_tc};flex-shrink:0;"></span>'
+                    f'<span style="font-size:0.78rem;font-weight:600;color:{_au_tc};">{_au_lbl}</span>'
+                    f'</div>'
+                    f'<div style="font-size:0.77rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                    f'{_au_det}</div>'
+                    f'</div>'
+                )
+            st.markdown(_au_rows_html, unsafe_allow_html=True)
+            st.caption(f"Showing {len(_au_filtered)} of {len(df_logs)} total events · Patient: {patient_id}")
+
+        st.divider()
+        _au_col1, _au_col2 = st.columns(2)
+        with _au_col1:
+            _au_csv = df_logs.to_csv(index=False).encode("utf-8") if not df_logs.empty else b""
+            st.download_button(
+                "⬇️ Export Audit Trail (CSV)", _au_csv,
+                f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv", use_container_width=True, disabled=df_logs.empty
+            )
+        with _au_col2:
+            if not df_logs.empty:
+                _au_txt  = f"CLINICAL AUDIT TRAIL\n{'='*50}\n"
+                _au_txt += f"Patient ID : {patient_id}\n"
+                _au_txt += f"Generated  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                _au_txt += f"{'='*50}\n\n"
+                for _, _au_r in df_logs.iterrows():
+                    _au_txt += f"[{_au_r['ts']}]  {_au_r['event']:<22}  {_au_r['details']}\n"
+                st.download_button(
+                    "📄 Export Formatted Report (TXT)",
+                    _au_txt.encode("utf-8"),
+                    f"audit_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    "text/plain", use_container_width=True
+                )
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Export Report
+        # =====================================================
+        # 7. EXPORT REPORT
+        # =====================================================
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("📄 Export Report")
         report_text = generate_report(patient_id, muscle_mass_df, pain_score_progress, fatigue_progress)
