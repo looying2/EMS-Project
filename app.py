@@ -1453,68 +1453,106 @@ if user_role == "Doctor":
 
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Segmental Lean Mass Analysis 
+        # Segmental Lean Mass Analysis
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("💪 Segmental Lean Mass Analysis ")
-        st.caption("Percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
-        segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-        percentages = [65.3, 84.8, 69.8, 93.4, 93.9]
-        statuses = ["Under", "Under", "Under", "Normal", "Normal"]
-        masses = [1.13, 13.3, 1.21, 5.11, 5.13]
-        changes = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
-        icons = ["💪", "🎯", "💪", "🦵", "🦵"]
-        col_left, col_right = st.columns([1.2, 0.9], gap="medium")
-        with col_left:
-            st.markdown("#### Performance vs Ideal")
-            for seg, pct, stat, icon in zip(segments, percentages, statuses, icons):
-                bar_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                status_color = "#EF5350" if pct < 90 else "#2A9D8F"
-                st.markdown(f"""
-                <div style="margin-bottom: 22px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                        <span style="font-size: 1.1rem;">{icon}</span>
-                        <span style="font-weight: 600; font-size: 0.9rem;">{seg}</span>
-                        <span style="margin-left: auto; font-size: 0.75rem; background-color: #F1F5F9; padding: 2px 8px; border-radius: 20px; color: {status_color}; font-weight: 500;">{stat}</span>
-                    </div>
-                    <div style="background-color: #E2E8F0; border-radius: 12px; height: 28px; width: 100%; position: relative;">
-                        <div style="background: linear-gradient(90deg, {bar_color}, {bar_color}CC); width: {pct}%; height: 28px; border-radius: 12px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;">
-                            <span style="color: white; font-size: 0.75rem; font-weight: 600;">{pct:.1f}%</span>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        with col_right:
+        st.subheader("💪 Segmental Lean Mass Analysis")
+        st.caption("Soft Lean Mass — percentage of ideal muscle mass per body segment (≥90% = Normal, <90% = Under)")
+
+        _seg_names  = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
+        _pcts       = [65.3, 84.8, 69.8, 93.4, 93.9]
+        _statuses   = ["Under", "Under", "Under", "Normal", "Normal"]
+        _masses     = [1.13, 13.3, 1.21, 5.11, 5.13]
+        _changes    = ["0.00", "-0.1", "0.00", "+0.04", "+0.09"]
+        _icons      = ["💪", "🎯", "💪", "🦵", "🦵"]
+
+        def _seg_color(p):
+            return "#EF5350" if p < 90 else "#2A9D8F"
+
+        def _change_meta(c):
+            if c.startswith("-"):    return "#DC2626", "↓"
+            elif c in ("0.00","0"):  return "#94A3B8", "→"
+            else:                    return "#16A34A", "↑"
+
+        # Pentagon radar — clockwise from top: Trunk, Right Arm, Right Leg, Left Leg, Left Arm
+        _radar_order = ["Trunk", "Right Arm", "Right Leg", "Left Leg", "Left Arm"]
+        _radar_pcts  = [_pcts[_seg_names.index(s)] for s in _radar_order]
+        _radar_pcts_closed = _radar_pcts + [_radar_pcts[0]]
+        _radar_theta = _radar_order + [_radar_order[0]]
+
+        _fig_radar = go.Figure()
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=_radar_pcts_closed,
+            theta=_radar_theta,
+            fill="toself",
+            fillcolor="rgba(42,157,143,0.18)",
+            line=dict(color="#2A9D8F", width=2),
+            marker=dict(size=7, color=[_seg_color(p) for p in _radar_pcts + [_radar_pcts[0]]]),
+            name="% of ideal",
+            hovertemplate="%{theta}: %{r:.1f}%<extra></extra>"
+        ))
+        _fig_radar.add_trace(go.Scatterpolar(
+            r=[90]*6,
+            theta=_radar_theta,
+            fill="none",
+            line=dict(color="rgba(46,125,50,0.35)", width=1.5, dash="dash"),
+            hoverinfo="skip",
+            showlegend=False
+        ))
+        _fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(240,247,255,0.6)",
+                radialaxis=dict(
+                    visible=True, range=[0,100],
+                    tickvals=[25,50,75,100],
+                    tickfont=dict(size=8, color="#94A3B8"),
+                    gridcolor="#E2E8F0", linecolor="#E2E8F0"
+                ),
+                angularaxis=dict(
+                    tickmode="array",
+                    tickvals=_radar_order,
+                    ticktext=[f"<b>{s}</b>" for s in _radar_order],
+                    tickfont=dict(size=11),
+                    rotation=90, direction="clockwise",
+                    gridcolor="#E2E8F0", linecolor="#E2E8F0"
+                )
+            ),
+            showlegend=False,
+            height=360,
+            margin=dict(l=50, r=50, t=30, b=30),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+
+        _col_fig, _col_cards = st.columns([1, 1.05], gap="large")
+
+        with _col_fig:
+            st.plotly_chart(_fig_radar, use_container_width=True)
+            st.caption("Dashed ring = 90% ideal threshold")
+
+        with _col_cards:
             st.markdown("#### Soft Lean Mass (kg)")
-            for seg, mass, change, icon in zip(segments, masses, changes, icons):
-                if change.startswith("-"):
-                    change_color = "#DC2626"
-                    arrow = "↓"
-                elif change == "0.00":
-                    change_color = "#64748B"
-                    arrow = "→"
-                else:
-                    change_color = "#16A34A"
-                    arrow = "↑"
-                sign = "" if change.startswith("-") else "+" if change != "0.00" else ""
-                display_change = f"{sign}{change}" if change != "0.00" else "0.00"
-                st.markdown(f"""
-                <div style="background-color: #F8FAFC; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; border-left: 4px solid {change_color};">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 1.1rem;">{icon}</span>
-                            <span style="font-weight: 500;">{seg}</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <span style="font-size: 1.3rem; font-weight: 700;">{mass}</span>
-                            <span style="font-size: 0.8rem;"> kg</span>
-                            <div style="font-size: 0.7rem; color: {change_color};">
-                                {arrow} {display_change} vs previous
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            st.caption("📈 Change from previous measurement (demo data)")
+            for _seg, _mass, _chg, _pct, _stat, _icon in zip(_seg_names, _masses, _changes, _pcts, _statuses, _icons):
+                _cc, _arr = _change_meta(_chg)
+                _sc = _seg_color(_pct)
+                _disp = _chg if _chg.startswith("-") else (f"+{_chg}" if _chg != "0.00" else "0.0")
+                _cbg = "#FEE2E2" if _cc == "#DC2626" else "#DCFCE7" if _cc == "#16A34A" else "#F1F5F9"
+                st.markdown(
+                    f'<div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;'
+                    f'padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
+                    f'<div style="display:flex;align-items:center;gap:9px;">'
+                    f'<span style="font-size:1.2rem;">{_icon}</span>'
+                    f'<div>'
+                    f'<div style="font-size:11px;font-weight:600;color:#94A3B8;letter-spacing:0.05em;text-transform:uppercase;">{_seg}</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#0F172A;line-height:1.1;">{_mass}<span style="font-size:12px;font-weight:400;color:#64748B;margin-left:2px;">kg</span></div>'
+                    f'<div style="font-size:12px;font-weight:600;color:{_sc};">{_stat} · {_pct:.1f}%</div>'
+                    f'</div></div>'
+                    f'<div style="background:{_cbg};border-radius:8px;padding:5px 10px;text-align:center;min-width:46px;">'
+                    f'<div style="font-size:15px;color:{_cc};">{_arr}</div>'
+                    f'<div style="font-size:11px;font-weight:600;color:{_cc};">{_disp}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True
+                )
+            st.caption("Change from previous measurement")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Long-Term Musculoskeletal Health
