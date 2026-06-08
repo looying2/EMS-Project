@@ -395,7 +395,7 @@ ss_init("ml_probabilities", [])
 ss_init("ml_session", {})
 ss_init("ml_thread", None)       # background thread handle
 ss_init("ml_pending", False)     # True while a thread is running
-
+ss_init("last_ocr_metrics", {})
 # Process-level shared state for background ML thread ↔ main loop communication.
 # st.cache_resource survives all reruns and is guaranteed to return the same object.
 @st.cache_resource
@@ -1656,6 +1656,7 @@ if user_role == "Doctor":
                         text_results = run_easyocr(uploaded_scan)
                         full_text = " ".join(text_results)
                         metrics = extract_metrics_from_text(full_text)
+                        st.session_state.last_ocr_metrics = metrics
                         overall_insights, risk_level = generate_inbody_ai_insight(metrics)
                         st.success("OCR Analysis Completed")
                         pid = metrics.get("Patient ID", "Not found")
@@ -1762,26 +1763,30 @@ if user_role == "Doctor":
                         with st.expander("🔍 View Raw OCR Extracted Text"):
                             st.text(full_text)
                         if st.button("Save to Patient Record", use_container_width=True):
-                            details = json.dumps(metrics)
-                            log_event(patient_id, "INBODY_OCR_UPLOAD", details)
-                            _report_date = metrics.get("Test Date", datetime.now().strftime("%Y-%m-%d"))
-                            _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
-                            _bia_data = {
-                                "date":                    _report_date,
-                                "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
-                                "body_fat_pct":            metrics.get("Body Fat Percentage"),
-                                "bmi":                     metrics.get("BMI"),
-                                "visceral_fat_level":      metrics.get("Visceral Fat Level"),
-                                "inbody_score":            metrics.get("InBody Score"),
-                                "smi":                     metrics.get("SMI"),
-                                "weight_kg":               metrics.get("Weight (kg)"),
-                                "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "source":                  "EasyOCR_InBody"
-                            }
-                            if fb_write(f"patients/{patient_id}/bia_reports/{_safe_date}", _bia_data):
-                                st.toast("InBody OCR data saved to Firebase!", icon="✅")
+                            _metrics = st.session_state.get("last_ocr_metrics", {})
+                            if not _metrics:
+                                st.toast("No OCR data to save. Run OCR analysis first.", icon="⚠️")
                             else:
-                                st.toast("Saved locally. Firebase sync failed.", icon="⚠️")
+                                details = json.dumps(metrics)
+                                log_event(patient_id, "INBODY_OCR_UPLOAD", details)
+                                _report_date = metrics.get("Test Date", datetime.now().strftime("%Y-%m-%d"))
+                                _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
+                                _bia_data = {
+                                    "date":                    _report_date,
+                                    "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
+                                    "body_fat_pct":            metrics.get("Body Fat Percentage"),
+                                    "bmi":                     metrics.get("BMI"),
+                                    "visceral_fat_level":      metrics.get("Visceral Fat Level"),
+                                    "inbody_score":            metrics.get("InBody Score"),
+                                    "smi":                     metrics.get("SMI"),
+                                    "weight_kg":               metrics.get("Weight (kg)"),
+                                    "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "source":                  "EasyOCR_InBody"
+                                }
+                                if fb_write(f"patients/{patient_id}/bia_reports/{_safe_date}", _bia_data):
+                                    st.toast("InBody OCR data saved to Firebase!", icon="✅")
+                                else:
+                                    st.toast("Saved locally. Firebase sync failed.", icon="⚠️")
                     except Exception as e:
                         st.error(f"OCR failed: {e}")
             else:
