@@ -1599,196 +1599,232 @@ if user_role == "Doctor":
 
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- TAB 2: BODY COMPOSITION ----------
-    with tab_body:
-        st.markdown("## InBody Scan Analysis")
-        st.info("Upload an InBody report image. EasyOCR will extract and organize the body composition results.")
-        col_ocr_left, col_ocr_right = st.columns([1.1, 1.4], gap="large")
-        with col_ocr_left:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("Upload InBody Report")
-            uploaded_scan = st.file_uploader("Choose report image", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
-            if uploaded_scan is not None:
-                st.image(uploaded_scan, caption="Uploaded InBody Report", use_container_width=True)
-                run_btn = st.button("Run OCR Analysis", type="primary", use_container_width=True)
-                st.info("📸 **Tip:** Ensure the report is well‑lit, flat, and the text is clearly visible. Avoid shadows and blurry images.")
-            else:
-                st.markdown("""<div style="height:300px; display:flex; align-items:center; justify-content:center; border:2px dashed #CBD5E1; border-radius:12px; color:#64748B; background:#F8FAFC;">Waiting for report upload...</div>""", unsafe_allow_html=True)
-                run_btn = False
-            st.markdown('</div>', unsafe_allow_html=True)
+    # ---------- TAB 2: BODY COMPOSITION (with auto-save) ----------
+with tab_body:
+    st.markdown("## InBody Scan Analysis")
+    st.info("Upload an InBody report image. EasyOCR will extract and save the body composition results to Firebase automatically.")
+    col_ocr_left, col_ocr_right = st.columns([1.1, 1.4], gap="large")
+    with col_ocr_left:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("Upload InBody Report")
+        uploaded_scan = st.file_uploader("Choose report image", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
+        if uploaded_scan is not None:
+            st.image(uploaded_scan, caption="Uploaded InBody Report", use_container_width=True)
+            run_btn = st.button("Run OCR Analysis", type="primary", use_container_width=True)
+            st.info("📸 **Tip:** Ensure the report is well‑lit, flat, and the text is clearly visible. Avoid shadows and blurry images.")
+        else:
+            st.markdown("""<div style="height:300px; display:flex; align-items:center; justify-content:center; border:2px dashed #CBD5E1; border-radius:12px; color:#64748B; background:#F8FAFC;">Waiting for report upload...</div>""", unsafe_allow_html=True)
+            run_btn = False
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        with col_ocr_right:
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            st.subheader("Body Composition Results")
-            def show_metric_card(label, value, unit, status):
-                if value is None:
-                    return None
-                if status == "normal":
-                    bg_color = "#FFFFFF"
-                    status_color = "#2E7D32"
-                    border_color = "#E0E0E0"
-                elif status == "under":
-                    bg_color = "#FFF8E1"
-                    status_color = "#F57C00"
-                    border_color = "#FFE0B2"
-                elif status == "over":
-                    bg_color = "#FFF8E1"
-                    status_color = "#F57C00"
-                    border_color = "#FFE0B2"
-                elif status == "high":
-                    bg_color = "#FFEBEE"
-                    status_color = "#C62828"
-                    border_color = "#FFCDD2"
-                else:
-                    bg_color = "#F5F5F5"
-                    status_color = "#757575"
-                    border_color = "#E0E0E0"
-                return f"""
-                <div style="background-color:{bg_color}; border-radius:12px; padding:10px; margin-bottom:8px; border:1px solid {border_color}; height:100%;">
-                    <div style="font-size:0.75rem; color:#546E7A;">{label}</div>
-                    <div style="font-size:1.5rem; font-weight:700; color:#1E293B;">{value} {unit}</div>
-                    <div style="font-size:0.65rem; color:{status_color}; margin-top:4px;">{status.upper()}</div>
-                </div>
-                """
-            if uploaded_scan is not None and run_btn:
-                with st.spinner("Extracting and analyzing report..."):
+    with col_ocr_right:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("Body Composition Results")
+        # Store metrics in session state to persist across reruns and avoid re‑saving
+        if "last_ocr_metrics" not in st.session_state:
+            st.session_state.last_ocr_metrics = {}
+        if "ocr_saved_flag" not in st.session_state:
+            st.session_state.ocr_saved_flag = False
+
+        def show_metric_card(label, value, unit, status):
+            if value is None:
+                return None
+            if status == "normal":
+                bg_color = "#FFFFFF"
+                status_color = "#2E7D32"
+                border_color = "#E0E0E0"
+            elif status == "under":
+                bg_color = "#FFF8E1"
+                status_color = "#F57C00"
+                border_color = "#FFE0B2"
+            elif status == "over":
+                bg_color = "#FFF8E1"
+                status_color = "#F57C00"
+                border_color = "#FFE0B2"
+            elif status == "high":
+                bg_color = "#FFEBEE"
+                status_color = "#C62828"
+                border_color = "#FFCDD2"
+            else:
+                bg_color = "#F5F5F5"
+                status_color = "#757575"
+                border_color = "#E0E0E0"
+            return f"""
+            <div style="background-color:{bg_color}; border-radius:12px; padding:10px; margin-bottom:8px; border:1px solid {border_color}; height:100%;">
+                <div style="font-size:0.75rem; color:#546E7A;">{label}</div>
+                <div style="font-size:1.5rem; font-weight:700; color:#1E293B;">{value} {unit}</div>
+                <div style="font-size:0.65rem; color:{status_color}; margin-top:4px;">{status.upper()}</div>
+            </div>
+            """
+
+        if uploaded_scan is not None and run_btn:
+            with st.spinner("Extracting and analyzing report..."):
+                try:
+                    text_results = run_easyocr(uploaded_scan)
+                    full_text = " ".join(text_results)
+                    metrics = extract_metrics_from_text(full_text)
+                    # Store metrics for display (even if Firebase save fails later)
+                    st.session_state.last_ocr_metrics = metrics
+                    st.session_state.ocr_saved_flag = False   # reset save flag for this new OCR
+                    st.success("OCR Analysis Completed")
+
+                    # --- Automatic save to Firebase ---
                     try:
-                        text_results = run_easyocr(uploaded_scan)
-                        full_text = " ".join(text_results)
-                        metrics = extract_metrics_from_text(full_text)
-                        st.session_state.last_ocr_metrics = metrics
-                        overall_insights, risk_level = generate_inbody_ai_insight(metrics)
-                        st.success("OCR Analysis Completed")
-                        pid = metrics.get("Patient ID", "Not found")
-                        tdate = metrics.get("Test Date", "Not found")
-                        st.markdown(f"**Patient ID:** `{pid}` &nbsp;&nbsp;|&nbsp;&nbsp; **Test Date:** `{tdate}`")
-                        smm = metrics.get("Skeletal Muscle Mass (kg)")
-                        smi_val = metrics.get("SMI")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if smm is not None:
-                                if smm < 28:
-                                    smm_status = "under"
-                                elif smm > 35:
-                                    smm_status = "over"
-                                else:
-                                    smm_status = "normal"
-                                st.markdown(show_metric_card("Skeletal Muscle Mass", smm, "kg", smm_status), unsafe_allow_html=True)
-                        with col2:
-                            if smi_val is not None:
-                                if smi_val < 7:
-                                    smi_status = "under"
-                                else:
-                                    smi_status = "normal"
-                                st.markdown(show_metric_card("SMI", smi_val, "kg/m²", smi_status), unsafe_allow_html=True)
-                        pbf = metrics.get("Body Fat Percentage")
-                        vfl = metrics.get("Visceral Fat Level")
-                        col3, col4 = st.columns(2)
-                        with col3:
-                            if pbf is not None:
-                                if pbf < 10:
-                                    pbf_status = "under"
-                                elif 10 <= pbf <= 20:
-                                    pbf_status = "normal"
-                                else:
-                                    pbf_status = "over"
-                                st.markdown(show_metric_card("Body Fat %", pbf, "%", pbf_status), unsafe_allow_html=True)
-                        with col4:
-                            if vfl is not None:
-                                vfl_status = "high" if vfl >= 10 else "normal"
-                                st.markdown(show_metric_card("Visceral Fat Level", vfl, "", vfl_status), unsafe_allow_html=True)
-                        bmi = metrics.get("BMI")
-                        score = metrics.get("InBody Score")
-                        col5, col6 = st.columns(2)
-                        with col5:
-                            if bmi is not None:
-                                if bmi < 18.5:
-                                    bmi_status = "under"
-                                elif 18.5 <= bmi <= 25:
-                                    bmi_status = "normal"
-                                else:
-                                    bmi_status = "over"
-                                st.markdown(show_metric_card("BMI", bmi, "kg/m²", bmi_status), unsafe_allow_html=True)
-                        with col6:
-                            if score is not None:
-                                score_status = "under" if score < 70 else "normal"
-                                st.markdown(show_metric_card("InBody Score", score, "/100", score_status), unsafe_allow_html=True)
-                        target = metrics.get("Target Weight (kg)")
-                        w_control = metrics.get("Weight Control (kg)")
-                        fat_control = metrics.get("Fat Control (kg)")
-                        m_control = metrics.get("Muscle Control (kg)")
-                        controls = []
-                        if target is not None:
-                            controls.append(("Target Weight", target, "kg"))
-                        if w_control is not None:
-                            controls.append(("Weight Control", w_control, "kg"))
-                        if fat_control is not None:
-                            controls.append(("Fat Control", fat_control, "kg"))
-                        if m_control is not None:
-                            controls.append(("Muscle Control", m_control, "kg"))
-                        if controls:
-                            st.markdown("#### Weight Control Recommendations")
-                            cols = st.columns(len(controls))
-                            for i, (label, val, unit) in enumerate(controls):
-                                with cols[i]:
-                                    if label in ["Weight Control", "Fat Control"]:
-                                        color = "#DC2626" if val < 0 else "#16A34A"
-                                    elif label == "Muscle Control":
-                                        color = "#16A34A" if val > 0 else "#DC2626"
-                                    else:
-                                        color = "#0F172A"
-                                    sign = "+" if val > 0 else ""
-                                    st.markdown(f"""
-                                    <div style="background-color:#FFFFFF; border-radius:12px; padding:14px; border:1px solid #E0E0E0; text-align:center;">
-                                        <div style="font-size:0.8rem; color:#64748B;">{label}</div>
-                                        <div style="font-size:1.7rem; font-weight:700; color:{color};">{sign}{val:.1f} {unit}</div>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                        if risk_level == "HIGH":
-                            st.error(f"**Overall Risk Level: {risk_level}** – Requires clinical attention.")
-                        elif risk_level == "MEDIUM":
-                            st.warning(f"**Overall Risk Level: {risk_level}** – Monitor closely.")
+                        pid = patient_id   # from sidebar
+                        _report_date = metrics.get("Test Date")
+                        if not _report_date:
+                            _report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        # Sanitize date for Firebase key (replace invalid chars)
+                        _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
+                        _bia_data = {
+                            "date":                    _report_date,
+                            "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
+                            "body_fat_pct":            metrics.get("Body Fat Percentage"),
+                            "bmi":                     metrics.get("BMI"),
+                            "visceral_fat_level":      metrics.get("Visceral Fat Level"),
+                            "inbody_score":            metrics.get("InBody Score"),
+                            "smi":                     metrics.get("SMI"),
+                            "weight_kg":               metrics.get("Weight (kg)"),
+                            "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "source":                  "EasyOCR_InBody"
+                        }
+                        # Write to Firebase
+                        save_success = fb_write(f"patients/{pid}/bia_reports/{_safe_date}", _bia_data)
+                        if save_success:
+                            st.toast("✅ InBody data automatically saved to Firebase!", icon="✅")
+                            st.session_state.ocr_saved_flag = True
+                            # Also log the event
+                            log_event(pid, "INBODY_OCR_UPLOAD", json.dumps(metrics))
                         else:
-                            st.success(f"**Overall Risk Level: {risk_level}** – Within acceptable limits.")
-                        with st.expander("📋 Full Clinical Insights (AI‑generated)"):
-                            for insight in overall_insights:
-                                st.write(insight)
-                        with st.expander("🦵 Segmental Analysis Interpretation"):
-                            st.markdown("""
-                            **Segmental Lean Analysis** – Evaluates muscle distribution compared to current weight.  
-                            **Segmental Fat Analysis** – Evaluates fat distribution compared to ideal.  
-                            **Visceral Fat Level** – Fat surrounding internal organs; keep under 10.  
-                            **SMI** – Appendicular lean mass / height²; <7 kg/m² indicates low muscle index.
-                            """)
-                        with st.expander("🔍 View Raw OCR Extracted Text"):
-                            st.text(full_text)
-                        if st.button("Save to Patient Record", use_container_width=True):
-                            _metrics = st.session_state.get("last_ocr_metrics", {})
-                            if not _metrics:
-                                st.toast("No OCR data to save. Run OCR analysis first.", icon="⚠️")
-                            else:
-                                details = json.dumps(metrics)
-                                log_event(patient_id, "INBODY_OCR_UPLOAD", details)
-                                _report_date = metrics.get("Test Date", datetime.now().strftime("%Y-%m-%d"))
-                                _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
-                                _bia_data = {
-                                    "date":                    _report_date,
-                                    "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
-                                    "body_fat_pct":            metrics.get("Body Fat Percentage"),
-                                    "bmi":                     metrics.get("BMI"),
-                                    "visceral_fat_level":      metrics.get("Visceral Fat Level"),
-                                    "inbody_score":            metrics.get("InBody Score"),
-                                    "smi":                     metrics.get("SMI"),
-                                    "weight_kg":               metrics.get("Weight (kg)"),
-                                    "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "source":                  "EasyOCR_InBody"
-                                }
-                                if fb_write(f"patients/{patient_id}/bia_reports/{_safe_date}", _bia_data):
-                                    st.toast("InBody OCR data saved to Firebase!", icon="✅")
-                                else:
-                                    st.toast("Saved locally. Firebase sync failed.", icon="⚠️")
+                            st.error("❌ Firebase save failed. Check console for error details.")
+                            st.toast("⚠️ Data not saved to Firebase. Check network or database permissions.", icon="⚠️")
                     except Exception as e:
-                        st.error(f"OCR failed: {e}")
+                        st.error(f"Error saving to Firebase: {str(e)}")
+                        st.toast("❌ Saving failed due to an exception.", icon="❌")
+
+                    # --- Now display the extracted metrics (same as before) ---
+                    overall_insights, risk_level = generate_inbody_ai_insight(metrics)
+                    pid = metrics.get("Patient ID", "Not found")
+                    tdate = metrics.get("Test Date", "Not found")
+                    st.markdown(f"**Patient ID:** `{pid}` &nbsp;&nbsp;|&nbsp;&nbsp; **Test Date:** `{tdate}`")
+                    smm = metrics.get("Skeletal Muscle Mass (kg)")
+                    smi_val = metrics.get("SMI")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if smm is not None:
+                            if smm < 28:
+                                smm_status = "under"
+                            elif smm > 35:
+                                smm_status = "over"
+                            else:
+                                smm_status = "normal"
+                            st.markdown(show_metric_card("Skeletal Muscle Mass", smm, "kg", smm_status), unsafe_allow_html=True)
+                    with col2:
+                        if smi_val is not None:
+                            if smi_val < 7:
+                                smi_status = "under"
+                            else:
+                                smi_status = "normal"
+                            st.markdown(show_metric_card("SMI", smi_val, "kg/m²", smi_status), unsafe_allow_html=True)
+                    pbf = metrics.get("Body Fat Percentage")
+                    vfl = metrics.get("Visceral Fat Level")
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        if pbf is not None:
+                            if pbf < 10:
+                                pbf_status = "under"
+                            elif 10 <= pbf <= 20:
+                                pbf_status = "normal"
+                            else:
+                                pbf_status = "over"
+                            st.markdown(show_metric_card("Body Fat %", pbf, "%", pbf_status), unsafe_allow_html=True)
+                    with col4:
+                        if vfl is not None:
+                            vfl_status = "high" if vfl >= 10 else "normal"
+                            st.markdown(show_metric_card("Visceral Fat Level", vfl, "", vfl_status), unsafe_allow_html=True)
+                    bmi = metrics.get("BMI")
+                    score = metrics.get("InBody Score")
+                    col5, col6 = st.columns(2)
+                    with col5:
+                        if bmi is not None:
+                            if bmi < 18.5:
+                                bmi_status = "under"
+                            elif 18.5 <= bmi <= 25:
+                                bmi_status = "normal"
+                            else:
+                                bmi_status = "over"
+                            st.markdown(show_metric_card("BMI", bmi, "kg/m²", bmi_status), unsafe_allow_html=True)
+                    with col6:
+                        if score is not None:
+                            score_status = "under" if score < 70 else "normal"
+                            st.markdown(show_metric_card("InBody Score", score, "/100", score_status), unsafe_allow_html=True)
+                    target = metrics.get("Target Weight (kg)")
+                    w_control = metrics.get("Weight Control (kg)")
+                    fat_control = metrics.get("Fat Control (kg)")
+                    m_control = metrics.get("Muscle Control (kg)")
+                    controls = []
+                    if target is not None:
+                        controls.append(("Target Weight", target, "kg"))
+                    if w_control is not None:
+                        controls.append(("Weight Control", w_control, "kg"))
+                    if fat_control is not None:
+                        controls.append(("Fat Control", fat_control, "kg"))
+                    if m_control is not None:
+                        controls.append(("Muscle Control", m_control, "kg"))
+                    if controls:
+                        st.markdown("#### Weight Control Recommendations")
+                        cols = st.columns(len(controls))
+                        for i, (label, val, unit) in enumerate(controls):
+                            with cols[i]:
+                                if label in ["Weight Control", "Fat Control"]:
+                                    color = "#DC2626" if val < 0 else "#16A34A"
+                                elif label == "Muscle Control":
+                                    color = "#16A34A" if val > 0 else "#DC2626"
+                                else:
+                                    color = "#0F172A"
+                                sign = "+" if val > 0 else ""
+                                st.markdown(f"""
+                                <div style="background-color:#FFFFFF; border-radius:12px; padding:14px; border:1px solid #E0E0E0; text-align:center;">
+                                    <div style="font-size:0.8rem; color:#64748B;">{label}</div>
+                                    <div style="font-size:1.7rem; font-weight:700; color:{color};">{sign}{val:.1f} {unit}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    if risk_level == "HIGH":
+                        st.error(f"**Overall Risk Level: {risk_level}** – Requires clinical attention.")
+                    elif risk_level == "MEDIUM":
+                        st.warning(f"**Overall Risk Level: {risk_level}** – Monitor closely.")
+                    else:
+                        st.success(f"**Overall Risk Level: {risk_level}** – Within acceptable limits.")
+                    with st.expander("📋 Full Clinical Insights (AI‑generated)"):
+                        for insight in overall_insights:
+                            st.write(insight)
+                    with st.expander("🦵 Segmental Analysis Interpretation"):
+                        st.markdown("""
+                        **Segmental Lean Analysis** – Evaluates muscle distribution compared to current weight.  
+                        **Segmental Fat Analysis** – Evaluates fat distribution compared to ideal.  
+                        **Visceral Fat Level** – Fat surrounding internal organs; keep under 10.  
+                        **SMI** – Appendicular lean mass / height²; <7 kg/m² indicates low muscle index.
+                        """)
+                    with st.expander("🔍 View Raw OCR Extracted Text"):
+                        st.text(full_text)
+
+                except Exception as e:
+                    st.error(f"OCR processing failed: {e}")
+                    st.session_state.last_ocr_metrics = {}
+        else:
+            # Display previously saved metrics if available (e.g., after rerun)
+            if st.session_state.last_ocr_metrics:
+                metrics = st.session_state.last_ocr_metrics
+                overall_insights, risk_level = generate_inbody_ai_insight(metrics)
+                pid = metrics.get("Patient ID", "Not found")
+                tdate = metrics.get("Test Date", "Not found")
+                st.markdown(f"**Patient ID:** `{pid}` &nbsp;&nbsp;|&nbsp;&nbsp; **Test Date:** `{tdate}`")
+                # ... (you can replicate the metric cards here for consistency, or keep simple)
+                st.info("Showing last extracted results. To re‑analyze, upload a new image and click 'Run OCR Analysis'.")
+                if st.session_state.ocr_saved_flag:
+                    st.success("✅ Data was saved to Firebase.")
+                else:
+                    st.warning("⚠️ Data not saved to Firebase. Please re‑run OCR.")
             else:
                 st.markdown("""
                 <div style="height:450px; display:flex; align-items:center; justify-content:center; border:2px dashed #CBD5E1; border-radius:12px; color:#64748B; background:#F8FAFC; text-align:center; padding:20px;">
@@ -1796,7 +1832,8 @@ if user_role == "Doctor":
                     body composition metrics.
                 </div>
                 """, unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
 
     # ---------- TAB 3: DEVICE CONTROL ----------
     with tab_device:
