@@ -1115,7 +1115,7 @@ if st.session_state.auth_user is None:
                 st.markdown("""<div style="background:#EFF6FF;border-radius:8px;padding:8px 12px;
                     font-size:0.76rem;color:#1D4ED8;margin-bottom:8px;">
                     You will see: Live &amp; AI &middot; Body Composition &middot;
-                    Device Control &middot; Records &amp; Reports &middot; Clinical AI Chat
+                    Device Control &middot; Records &amp; Reports &middot;
                     </div>""", unsafe_allow_html=True)
             else:
                 st.markdown("""<div style="background:#ECFDF5;border-radius:8px;padding:8px 12px;
@@ -1358,7 +1358,7 @@ if st.session_state.connected:
 if user_role == "Doctor":
     # ---------- DOCTOR VIEW: full clinical dashboard with tabs ----------
     tab_live_ai, tab_body, tab_device, tab_records, tab_chat = st.tabs(
-        ["🩺 Live & AI", "🧬 Body Composition", "⚙️ Device Control", "📋 Records & Reports", "💬 Clinical AI Chat"]
+        ["🩺 Live & AI", "🧬 Body Composition", "⚙️ Device Control", "📋 Records & Reports"]
     )
 
         # ---------- TAB 1: LIVE & AI ----------
@@ -2367,79 +2367,7 @@ if user_role == "Doctor":
                            mime="text/plain", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- TAB 5: CLINICAL AI CHAT (unchanged) ----------
-    with tab_chat:
-        st.markdown("""
-        <style>
-        .chat-message-user { background-color: #EFF6FF; border-radius: 20px; padding: 12px 18px; margin: 8px 0; border-left: 5px solid #3B82F6; max-width: 85%; margin-left: auto; word-wrap: break-word; }
-        .chat-message-assistant { background-color: #F8FAFC; border-radius: 20px; padding: 12px 18px; margin: 8px 0; border-left: 5px solid #10B981; max-width: 85%; margin-right: auto; word-wrap: break-word; }
-        .suggestion-chip { background-color: #F1F5F9; border-radius: 40px; padding: 8px 16px; margin: 5px; display: inline-block; font-size: 0.9rem; font-weight: 500; color: #1E293B; cursor: pointer; transition: all 0.2s; border: 1px solid #E2E8F0; text-align: center; }
-        .suggestion-chip:hover { background-color: #E2E8F0; transform: translateY(-1px); }
-        </style>
-        """, unsafe_allow_html=True)
-
-        st.markdown("### 🧠 AI Clinical Assistant")
-        st.info("Ask any question about rehabilitation protocols, treatment guidelines, or patient management.")
-
-        col_title, col_clear = st.columns([3, 1])
-        with col_clear:
-            if st.button("🗑️ Clear Chat", use_container_width=True):
-                st.session_state.rag_messages = []
-                st.rerun()
-
-        st.markdown("#### 💡 Suggested questions")
-        suggested = [
-            "Contraindications of EMS therapy?",
-            "EMS intensity for sarcopenia?",
-            "Quadriceps electrode placement?",
-            "Signs of muscle overwork?",
-            "Difference between EMS and TENS?",
-            "Frequency of EMS sessions?"
-        ]
-        cols = st.columns(3)
-        for i, q in enumerate(suggested):
-            with cols[i % 3]:
-                if st.button(q, key=f"suggest_{i}", use_container_width=True):
-                    st.session_state.rag_chat_input = q
-                    st.rerun()
-
-        if "rag_messages" not in st.session_state:
-            st.session_state.rag_messages = []
-
-        for msg in st.session_state.rag_messages:
-            if msg["role"] == "user":
-                with st.chat_message("user"):
-                    st.markdown(msg["content"])
-            else:
-                with st.chat_message("assistant"):
-                    st.markdown(msg["content"])
-                    if "references" in msg and msg["references"]:
-                        with st.expander("📚 References"):
-                            for ref in msg["references"]:
-                                st.caption(f"• {ref}")
-
-        if "rag_chat_input" not in st.session_state:
-            st.session_state.rag_chat_input = ""
-
-        prompt = st.chat_input("Ask a clinical question...", key="rag_input")
-        if prompt is None and st.session_state.rag_chat_input:
-            prompt = st.session_state.rag_chat_input
-            st.session_state.rag_chat_input = ""
-
-        if prompt:
-            st.session_state.rag_messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            with st.chat_message("assistant"):
-                with st.spinner("Searching knowledge base..."):
-                    answer, references = call_rag_api(prompt)
-                    st.markdown(answer)
-                    if references:
-                        with st.expander("📚 References"):
-                            for ref in references:
-                                st.caption(f"• {ref}")
-            st.session_state.rag_messages.append({"role": "assistant", "content": answer, "references": references})
-
+  
 else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with AI chat + body composition
     # ==========================================
     # CAREGIVER DASHBOARD (compact, large text, clear visuals)
