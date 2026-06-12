@@ -1357,7 +1357,7 @@ if st.session_state.connected:
 
 if user_role == "Doctor":
     # ---------- DOCTOR VIEW: full clinical dashboard with tabs ----------
-    tab_live_ai, tab_body, tab_device, tab_records, tab_chat = st.tabs(
+    tab_live_ai, tab_body, tab_device, tab_records = st.tabs(
         ["🩺 Live & AI", "🧬 Body Composition", "⚙️ Device Control", "📋 Records & Reports"]
     )
 
