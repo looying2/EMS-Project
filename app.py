@@ -2440,8 +2440,10 @@ if user_role == "Doctor":
                                 st.caption(f"• {ref}")
             st.session_state.rag_messages.append({"role": "assistant", "content": answer, "references": references})
 
-else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progress trends
-
+else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with AI chat + body composition
+    # ==========================================
+    # CAREGIVER DASHBOARD (compact, large text, clear visuals)
+    # ==========================================
     st.markdown("""
     <style>
         /* Compact caregiver cards */
@@ -2496,17 +2498,57 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
         .stAlert {
             font-size: 0.9rem !important;
         }
+        /* Chat styling (copied from doctor view) */
+        .chat-message-user {
+            background-color: #EFF6FF;
+            border-radius: 20px;
+            padding: 12px 18px;
+            margin: 8px 0;
+            border-left: 5px solid #3B82F6;
+            max-width: 85%;
+            margin-left: auto;
+            word-wrap: break-word;
+        }
+        .chat-message-assistant {
+            background-color: #F8FAFC;
+            border-radius: 20px;
+            padding: 12px 18px;
+            margin: 8px 0;
+            border-left: 5px solid #10B981;
+            max-width: 85%;
+            margin-right: auto;
+            word-wrap: break-word;
+        }
+        .suggestion-chip {
+            background-color: #F1F5F9;
+            border-radius: 40px;
+            padding: 8px 16px;
+            margin: 5px;
+            display: inline-block;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #1E293B;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid #E2E8F0;
+            text-align: center;
+        }
+        .suggestion-chip:hover {
+            background-color: #E2E8F0;
+            transform: translateY(-1px);
+        }
     </style>
     """, unsafe_allow_html=True)
 
     st.markdown("## 👨‍👩‍👧 Caregiver Dashboard")
-    st.caption("Simple monitoring with progress trends")
+    st.caption("Simple monitoring with AI assistance and body composition tracking")
 
+    # ────────────── LIVE DATA (telemetry, muscle state, gait) ──────────────
     tele = st.session_state.telemetry
     latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
     pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
 
-    # Status emoji & colors
+    # Status emoji & colours
     if pred_label == "Relaxed":
         status_emoji = "😌"
         status_color = "#DCFCE7"
@@ -2524,7 +2566,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
         status_color = "#FEE2E2"
         border_color = "#EF4444"
 
-    # ---- TOP ROW: 3 compact cards ----
+    # ────────────── TOP ROW: 3 compact cards ──────────────
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown(f"""
@@ -2563,17 +2605,17 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
         </div>
         """, unsafe_allow_html=True)
 
-    # ---- PATIENT FEEDBACK (smaller sliders) ----
-    st.markdown("### Patient feelings")
+    # ────────────── PATIENT FEEDBACK (sliders) ──────────────
+    st.markdown("### 😊 Patient feelings")
     col_pain, col_fatigue = st.columns(2)
     with col_pain:
-        pain = st.slider("😖 Pain (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
+        pain = st.slider("Pain (0‑10)", 0, 10, value=st.session_state.get("live_pain", 2), key="caregiver_pain")
     with col_fatigue:
-        fatigue = st.slider("😴 Fatigue (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
+        fatigue = st.slider("Fatigue (0‑10)", 0, 10, value=st.session_state.get("live_fatigue", 4), key="caregiver_fatigue")
     st.session_state.live_pain = pain
     st.session_state.live_fatigue = fatigue
 
-    # Simple alert based on feedback
+    # Simple alert
     if pain > 7:
         st.error("🔴 High pain – stop therapy and tell the clinician.")
     elif fatigue > 7:
@@ -2583,16 +2625,14 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
     else:
         st.success("🟢 Condition looks good.")
 
-    # ---- PROGRESS TRENDS SECTION (segmental analysis + EMG trend) ----
+    # ────────────── PROGRESS TRENDS (EMG + muscle health) ──────────────
     st.markdown('<div class="trend-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">📊 Progress Trends</div>', unsafe_allow_html=True)
 
-    # Tabbed or two-column layout for trends
     trend_tab1, trend_tab2 = st.tabs(["📈 EMG Trend (Current Session)", "💪 Muscle Health (Last Scan)"])
 
     with trend_tab1:
         if not tele.empty:
-            # Simple line chart of EMG over time (last 100 points)
             chart_df = tele[['t', 'emg']].tail(100).copy()
             st.line_chart(chart_df.set_index('t')['emg'], height=250)
             st.caption("EMG amplitude over time – high values indicate strong muscle activity.")
@@ -2600,9 +2640,7 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
             st.info("Start a session to see EMG trend.")
 
     with trend_tab2:
-        # Show segmental lean mass analysis from the most recent BIA scan (if any)
-        # Retrieve the latest BIA report from Firebase or session state
-        # For simplicity, we use session state if available; otherwise show placeholder
+        # Show latest body composition metrics from last OCR (if any)
         if "last_ocr_metrics" in st.session_state and st.session_state.last_ocr_metrics:
             metrics = st.session_state.last_ocr_metrics
             smm = metrics.get("Skeletal Muscle Mass (kg)")
@@ -2619,11 +2657,10 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
                 col_c.metric("🎯 Visceral Fat", vfl)
             if bmi:
                 col_d.metric("📏 BMI", f"{bmi:.1f}")
-            # Segmental lean mass (radar chart simplified as bar chart)
-            st.markdown("**Segmental Lean Mass (% of ideal)**")
+            # Segmental lean mass (simplified bar chart)
             segments = ["Left Arm", "Trunk", "Right Arm", "Left Leg", "Right Leg"]
-            # Try to extract segmental percentages from OCR if available; otherwise dummy placeholder
-            seg_pcts = metrics.get("segmental_pcts", [65.3, 84.8, 69.8, 93.4, 93.9])  # fallback demo
+            # Use dummy data if not available; in real case you would extract from metrics
+            seg_pcts = [65.3, 84.8, 69.8, 93.4, 93.9]  # fallback demo
             if isinstance(seg_pcts, list) and len(seg_pcts) == 5:
                 df_seg = pd.DataFrame({"Segment": segments, "% of ideal": seg_pcts})
                 st.bar_chart(df_seg.set_index("Segment"), height=250)
@@ -2631,26 +2668,321 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
             else:
                 st.info("Full segmental analysis not available from the latest scan. Run an InBody OCR for detailed data.")
         else:
-            st.info("No body composition data yet. Go to the 'Body Composition' tab (Doctor view) or upload an InBody report to see muscle health trends.")
+            st.info("No body composition data yet. Use the 'Body Composition Scan' expander below to upload a report.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Optional: Pain/Fatigue trend over last few sessions (could be extracted from Firebase logs)
-    # For demonstration, we'll show a dummy trend if no real data
+    # Optional: Pain/Fatigue trend over last sessions (dummy for now)
     st.markdown('<div class="trend-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">📉 Pain & Fatigue Trend (Last 5 Sessions)</div>', unsafe_allow_html=True)
-    # Try to read session logs from Firebase/audit db to compute trends
-    # Fallback: generate dummy data for illustration
-    import pandas as pd
     dummy_sessions = [f"Session {i+1}" for i in range(5)]
-    dummy_pain = [5, 4, 3, 2, 1]     # improving
+    dummy_pain = [5, 4, 3, 2, 1]
     dummy_fatigue = [6, 5, 4, 3, 2]
     trend_df = pd.DataFrame({"Session": dummy_sessions, "Pain": dummy_pain, "Fatigue": dummy_fatigue})
     st.line_chart(trend_df.set_index("Session"), height=250)
     st.caption("Lower pain and fatigue over time indicate progress.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Keep the original expander for muscle health details (optional)
-    with st.expander("📋 Detailed Muscle Health by Body Part"):
+    # ────────────── AI CLINICAL ASSISTANT (expander) ──────────────
+    with st.expander("💬 Ask AI Clinical Assistant", expanded=False):
+        st.markdown("### 🧠 AI Clinical Assistant")
+        st.info("Ask any question about rehabilitation protocols, treatment guidelines, or patient management.")
+
+        # Clear chat button
+        col_clear, _ = st.columns([1, 3])
+        with col_clear:
+            if st.button("🗑️ Clear Chat", use_container_width=True):
+                st.session_state.rag_messages = []
+                st.rerun()
+
+        # Suggested questions (chips)
+        st.markdown("#### 💡 Suggested questions")
+        suggested = [
+            "Contraindications of EMS therapy?",
+            "EMS intensity for sarcopenia?",
+            "Quadriceps electrode placement?",
+            "Signs of muscle overwork?",
+            "Difference between EMS and TENS?",
+            "Frequency of EMS sessions?"
+        ]
+        cols = st.columns(3)
+        for i, q in enumerate(suggested):
+            with cols[i % 3]:
+                if st.button(q, key=f"suggest_caregiver_{i}", use_container_width=True):
+                    st.session_state.rag_chat_input = q
+                    st.rerun()
+
+        # Chat history
+        if "rag_messages" not in st.session_state:
+            st.session_state.rag_messages = []
+
+        for msg in st.session_state.rag_messages:
+            if msg["role"] == "user":
+                with st.chat_message("user"):
+                    st.markdown(msg["content"])
+            else:
+                with st.chat_message("assistant"):
+                    st.markdown(msg["content"])
+                    if "references" in msg and msg["references"]:
+                        with st.expander("📚 References"):
+                            for ref in msg["references"]:
+                                st.caption(f"• {ref}")
+
+        # Chat input
+        if "rag_chat_input" not in st.session_state:
+            st.session_state.rag_chat_input = ""
+
+        prompt = st.chat_input("Ask a clinical question...", key="caregiver_rag_input")
+        if prompt is None and st.session_state.rag_chat_input:
+            prompt = st.session_state.rag_chat_input
+            st.session_state.rag_chat_input = ""
+
+        if prompt:
+            st.session_state.rag_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Searching knowledge base..."):
+                    answer, references = call_rag_api(prompt)
+                    st.markdown(answer)
+                    if references:
+                        with st.expander("📚 References"):
+                            for ref in references:
+                                st.caption(f"• {ref}")
+            st.session_state.rag_messages.append({"role": "assistant", "content": answer, "references": references})
+
+    # ────────────── BODY COMPOSITION SCAN (expander) ──────────────
+    with st.expander("🩺 InBody Scan Analysis", expanded=False):
+        st.markdown("## InBody Scan Analysis")
+        st.info("Upload an InBody report image. EasyOCR will extract and save the body composition results to Firebase automatically.")
+        col_ocr_left, col_ocr_right = st.columns([1.1, 1.4], gap="large")
+        with col_ocr_left:
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("Upload InBody Report")
+            uploaded_scan = st.file_uploader("Choose report image", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
+            if uploaded_scan is not None:
+                st.image(uploaded_scan, caption="Uploaded InBody Report", use_container_width=True)
+                run_btn = st.button("Run OCR Analysis", type="primary", use_container_width=True)
+                st.info("📸 **Tip:** Ensure the report is well‑lit, flat, and the text is clearly visible. Avoid shadows and blurry images.")
+            else:
+                st.markdown("""<div style="height:300px; display:flex; align-items:center; justify-content:center; border:2px dashed #CBD5E1; border-radius:12px; color:#64748B; background:#F8FAFC;">Waiting for report upload...</div>""", unsafe_allow_html=True)
+                run_btn = False
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_ocr_right:
+            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+            st.subheader("Body Composition Results")
+            if "last_ocr_metrics" not in st.session_state:
+                st.session_state.last_ocr_metrics = {}
+            if "ocr_saved_flag" not in st.session_state:
+                st.session_state.ocr_saved_flag = False
+
+            def show_metric_card(label, value, unit, status):
+                if value is None:
+                    return None
+                if status == "normal":
+                    bg_color = "#FFFFFF"
+                    status_color = "#2E7D32"
+                    border_color = "#E0E0E0"
+                elif status == "under":
+                    bg_color = "#FFF8E1"
+                    status_color = "#F57C00"
+                    border_color = "#FFE0B2"
+                elif status == "over":
+                    bg_color = "#FFF8E1"
+                    status_color = "#F57C00"
+                    border_color = "#FFE0B2"
+                elif status == "high":
+                    bg_color = "#FFEBEE"
+                    status_color = "#C62828"
+                    border_color = "#FFCDD2"
+                else:
+                    bg_color = "#F5F5F5"
+                    status_color = "#757575"
+                    border_color = "#E0E0E0"
+                return f"""
+                <div style="background-color:{bg_color}; border-radius:12px; padding:10px; margin-bottom:8px; border:1px solid {border_color}; height:100%;">
+                    <div style="font-size:0.75rem; color:#546E7A;">{label}</div>
+                    <div style="font-size:1.5rem; font-weight:700; color:#1E293B;">{value} {unit}</div>
+                    <div style="font-size:0.65rem; color:{status_color}; margin-top:4px;">{status.upper()}</div>
+                </div>
+                """
+
+            if uploaded_scan is not None and run_btn:
+                with st.spinner("Extracting and analyzing report..."):
+                    try:
+                        text_results = run_easyocr(uploaded_scan)
+                        full_text = " ".join(text_results)
+                        metrics = extract_metrics_from_text(full_text)
+                        st.session_state.last_ocr_metrics = metrics
+                        st.session_state.ocr_saved_flag = False
+                        st.success("OCR Analysis Completed")
+
+                        # Auto-save to Firebase
+                        try:
+                            pid = patient_id
+                            _report_date = metrics.get("Test Date")
+                            if not _report_date:
+                                _report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            _safe_date = str(_report_date).replace("/", "-").replace(" ", "_").replace(":", "")
+                            _bia_data = {
+                                "date":                    _report_date,
+                                "skeletal_muscle_mass_kg": metrics.get("Skeletal Muscle Mass (kg)"),
+                                "body_fat_pct":            metrics.get("Body Fat Percentage"),
+                                "bmi":                     metrics.get("BMI"),
+                                "visceral_fat_level":      metrics.get("Visceral Fat Level"),
+                                "inbody_score":            metrics.get("InBody Score"),
+                                "smi":                     metrics.get("SMI"),
+                                "weight_kg":               metrics.get("Weight (kg)"),
+                                "uploaded_at":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "source":                  "EasyOCR_InBody"
+                            }
+                            save_success = fb_write(f"patients/{pid}/bia_reports/{_safe_date}", _bia_data)
+                            if save_success:
+                                st.toast("✅ InBody data automatically saved to Firebase!", icon="✅")
+                                st.session_state.ocr_saved_flag = True
+                                log_event(pid, "INBODY_OCR_UPLOAD", json.dumps(metrics))
+                            else:
+                                st.error("❌ Firebase save failed. Check console for error details.")
+                                st.toast("⚠️ Data not saved to Firebase.", icon="⚠️")
+                        except Exception as e:
+                            st.error(f"Error saving to Firebase: {str(e)}")
+                            st.toast("❌ Saving failed.", icon="❌")
+
+                        # Display extracted metrics
+                        overall_insights, risk_level = generate_inbody_ai_insight(metrics)
+                        pid_disp = metrics.get("Patient ID", "Not found")
+                        tdate = metrics.get("Test Date", "Not found")
+                        st.markdown(f"**Patient ID:** `{pid_disp}` &nbsp;&nbsp;|&nbsp;&nbsp; **Test Date:** `{tdate}`")
+                        smm = metrics.get("Skeletal Muscle Mass (kg)")
+                        smi_val = metrics.get("SMI")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if smm is not None:
+                                if smm < 28:
+                                    smm_status = "under"
+                                elif smm > 35:
+                                    smm_status = "over"
+                                else:
+                                    smm_status = "normal"
+                                st.markdown(show_metric_card("Skeletal Muscle Mass", smm, "kg", smm_status), unsafe_allow_html=True)
+                        with col2:
+                            if smi_val is not None:
+                                if smi_val < 7:
+                                    smi_status = "under"
+                                else:
+                                    smi_status = "normal"
+                                st.markdown(show_metric_card("SMI", smi_val, "kg/m²", smi_status), unsafe_allow_html=True)
+                        pbf = metrics.get("Body Fat Percentage")
+                        vfl = metrics.get("Visceral Fat Level")
+                        col3, col4 = st.columns(2)
+                        with col3:
+                            if pbf is not None:
+                                if pbf < 10:
+                                    pbf_status = "under"
+                                elif 10 <= pbf <= 20:
+                                    pbf_status = "normal"
+                                else:
+                                    pbf_status = "over"
+                                st.markdown(show_metric_card("Body Fat %", pbf, "%", pbf_status), unsafe_allow_html=True)
+                        with col4:
+                            if vfl is not None:
+                                vfl_status = "high" if vfl >= 10 else "normal"
+                                st.markdown(show_metric_card("Visceral Fat Level", vfl, "", vfl_status), unsafe_allow_html=True)
+                        bmi = metrics.get("BMI")
+                        score = metrics.get("InBody Score")
+                        col5, col6 = st.columns(2)
+                        with col5:
+                            if bmi is not None:
+                                if bmi < 18.5:
+                                    bmi_status = "under"
+                                elif 18.5 <= bmi <= 25:
+                                    bmi_status = "normal"
+                                else:
+                                    bmi_status = "over"
+                                st.markdown(show_metric_card("BMI", bmi, "kg/m²", bmi_status), unsafe_allow_html=True)
+                        with col6:
+                            if score is not None:
+                                score_status = "under" if score < 70 else "normal"
+                                st.markdown(show_metric_card("InBody Score", score, "/100", score_status), unsafe_allow_html=True)
+
+                        target = metrics.get("Target Weight (kg)")
+                        w_control = metrics.get("Weight Control (kg)")
+                        fat_control = metrics.get("Fat Control (kg)")
+                        m_control = metrics.get("Muscle Control (kg)")
+                        controls = []
+                        if target is not None:
+                            controls.append(("Target Weight", target, "kg"))
+                        if w_control is not None:
+                            controls.append(("Weight Control", w_control, "kg"))
+                        if fat_control is not None:
+                            controls.append(("Fat Control", fat_control, "kg"))
+                        if m_control is not None:
+                            controls.append(("Muscle Control", m_control, "kg"))
+                        if controls:
+                            st.markdown("#### Weight Control Recommendations")
+                            cols = st.columns(len(controls))
+                            for i, (label, val, unit) in enumerate(controls):
+                                with cols[i]:
+                                    if label in ["Weight Control", "Fat Control"]:
+                                        color = "#DC2626" if val < 0 else "#16A34A"
+                                    elif label == "Muscle Control":
+                                        color = "#16A34A" if val > 0 else "#DC2626"
+                                    else:
+                                        color = "#0F172A"
+                                    sign = "+" if val > 0 else ""
+                                    st.markdown(f"""
+                                    <div style="background-color:#FFFFFF; border-radius:12px; padding:14px; border:1px solid #E0E0E0; text-align:center;">
+                                        <div style="font-size:0.8rem; color:#64748B;">{label}</div>
+                                        <div style="font-size:1.7rem; font-weight:700; color:{color};">{sign}{val:.1f} {unit}</div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                        if risk_level == "HIGH":
+                            st.error(f"**Overall Risk Level: {risk_level}** – Requires clinical attention.")
+                        elif risk_level == "MEDIUM":
+                            st.warning(f"**Overall Risk Level: {risk_level}** – Monitor closely.")
+                        else:
+                            st.success(f"**Overall Risk Level: {risk_level}** – Within acceptable limits.")
+
+                        with st.expander("📋 Full Clinical Insights (AI‑generated)"):
+                            for insight in overall_insights:
+                                st.write(insight)
+                        with st.expander("🦵 Segmental Analysis Interpretation"):
+                            st.markdown("""
+                            **Segmental Lean Analysis** – Evaluates muscle distribution compared to current weight.  
+                            **Segmental Fat Analysis** – Evaluates fat distribution compared to ideal.  
+                            **Visceral Fat Level** – Fat surrounding internal organs; keep under 10.  
+                            **SMI** – Appendicular lean mass / height²; <7 kg/m² indicates low muscle index.
+                            """)
+                        with st.expander("🔍 View Raw OCR Extracted Text"):
+                            st.text(full_text)
+
+                    except Exception as e:
+                        st.error(f"OCR processing failed: {e}")
+                        st.session_state.last_ocr_metrics = {}
+            else:
+                if st.session_state.last_ocr_metrics:
+                    metrics = st.session_state.last_ocr_metrics
+                    overall_insights, risk_level = generate_inbody_ai_insight(metrics)
+                    pid_disp = metrics.get("Patient ID", "Not found")
+                    tdate = metrics.get("Test Date", "Not found")
+                    st.markdown(f"**Patient ID:** `{pid_disp}` &nbsp;&nbsp;|&nbsp;&nbsp; **Test Date:** `{tdate}`")
+                    st.info("Showing last extracted results. To re‑analyze, upload a new image and click 'Run OCR Analysis'.")
+                    if st.session_state.ocr_saved_flag:
+                        st.success("✅ Data was saved to Firebase.")
+                    else:
+                        st.warning("⚠️ Data not saved to Firebase. Please re‑run OCR.")
+                else:
+                    st.markdown("""
+                    <div style="height:450px; display:flex; align-items:center; justify-content:center; border:2px dashed #CBD5E1; border-radius:12px; color:#64748B; background:#F8FAFC; text-align:center; padding:20px;">
+                        Upload a report and run OCR analysis to view<br>
+                        body composition metrics.
+                    </div>
+                    """, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # ────────────── DETAILED MUSCLE HEALTH (optional expander) ──────────────
+    with st.expander("💪 Detailed Muscle Health by Body Part", expanded=False):
         st.markdown("""
         <style>
             .muscle-card {
@@ -2692,16 +3024,15 @@ else:   # CAREGIVER VIEW – simplified, elderly‑friendly dashboard with progr
             """, unsafe_allow_html=True)
         st.caption("✅ Normal = muscle mass ≥90% of ideal. ⚠️ Weak = below 90%.")
 
-    # Keep the basic session control buttons (Start, Pause, Stop) – they are already in the main area above
-    # The caregiver can also see the EMG chart if they expand the "Show EMG trend" expander
-    with st.expander("📈 Show full EMG trend (last 200 readings)"):
+    # ────────────── FULL EMG TREND (expander) ──────────────
+    with st.expander("📈 Show full EMG trend (last 200 readings)", expanded=False):
         if not tele.empty:
             st.line_chart(tele.set_index("t")["emg"], height=300)
         else:
             st.write("No data yet.")
 
     st.info("Use the buttons above (START, PAUSE, STOP) to control the session. Press **Emergency STOP** if the patient feels unsafe.")
-
+    
 # ==========================================
 # 11. AUTO REFRESH
 # ==========================================
